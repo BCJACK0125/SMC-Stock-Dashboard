@@ -7,12 +7,22 @@ config.py
 
 # 股票代號：yfinance 格式。台股請加 .TW（上市）或 .TWO（上櫃）。
 WATCHLIST = [
-    {"symbol": "2330.TW", "name": "台積電"},
-    {"symbol": "2317.TW", "name": "鴻海"},
-    {"symbol": "0050.TW", "name": "元大台灣50"},
-    {"symbol": "AAPL",    "name": "Apple"},
-    {"symbol": "NVDA",    "name": "NVIDIA"},
+    { symbol: "2330.TW", name: "台積電" },
+    { symbol: "2317.TW", name: "鴻海" },
+    { symbol: "0050.TW", name: "元大台灣50" },
+    { symbol: "AAPL", name: "Apple" },
+    { symbol: "NVDA", name: "NVIDIA" },
+    { symbol: "BE", name: "Bloom Energy" },
+    { symbol: "MU", name: "美光科技" },
+    { symbol: "SNDK", name: "SanDisk" },
+    { symbol: "LITE", name: "Lumentum" },
+    { symbol: "SKHY", name: "SK海力士" },
+    { symbol: "SPCX", name: "SpaceX" },
+    { symbol: "2327.TW", name: "國巨" },
+    { symbol: "MSFT", name: "微軟" },
+    { symbol: "PLTR", name: "Palantir" },
 ]
+
 
 # yfinance 下載參數
 # yfinance 沒有原生的 4h 區間，所以做法是抓「小時線」(60m) 回來，
