@@ -1,0 +1,45 @@
+name: Update SMC Stock Dashboard
+
+on:
+  schedule:
+    # cron 使用 UTC 時間。台北時間(UTC+8) 18:00 = UTC 10:00。
+    # 預設每天(含週末)都跑一次；若不想在沒有新資料的週末浪費額度，
+    # 可改成 '0 10 * * 1-5'（只在週一~週五執行）。
+    - cron: "0 10 * * *"
+  workflow_dispatch: {}   # 允許在 GitHub 網頁上手動點擊執行，方便測試
+
+permissions:
+  contents: write   # 需要 write 權限才能把產生的 index.html push 回 repo
+
+jobs:
+  update-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run SMC analysis and generate index.html
+        env:
+          GMAIL_SENDER: ${{ secrets.GMAIL_SENDER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_RECIPIENT: ${{ secrets.ALERT_RECIPIENT }}
+        run: |
+          python main.py
+
+      - name: Commit and push updated dashboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --quiet --cached || git commit -m "chore: auto-update SMC dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
