@@ -20,6 +20,7 @@ import argparse
 import sys
 from datetime import datetime, timezone, timedelta
 
+import pandas as pd
 import yfinance as yf
 
 from smc.analyzer import SMCAnalyzer
@@ -31,16 +32,34 @@ import config
 TAIPEI_TZ = timezone(timedelta(hours=8))
 
 
+def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """把細週期 OHLCV 資料合併成粗週期（例如 60m -> 4h）。"""
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    out = df.resample(rule, label="left", closed="left").agg(agg)
+    # resample 會在沒有交易的區塊(收盤時段/週末)產生全 NaN 的列，直接丟掉
+    out = out.dropna(subset=["Open", "High", "Low", "Close"])
+    return out
+
+
 def fetch_data(symbol: str):
+    interval = getattr(config, "RAW_INTERVAL", None) or config.DATA_INTERVAL
     df = yf.download(
-        symbol, period=config.DATA_PERIOD, interval=config.DATA_INTERVAL,
+        symbol, period=config.DATA_PERIOD, interval=interval,
         progress=False, auto_adjust=True,
     )
     if df.empty:
-        raise RuntimeError(f"{symbol} 抓不到資料（可能代號錯誤或 yfinance 暫時異常）")
+        raise RuntimeError(f"{symbol} 抓不到資料（可能代號錯誤、yfinance 暫時異常，"
+                            f"或此代號不支援 {interval} 這個 intraday 區間）")
     # yfinance 新版有時會回傳 MultiIndex 欄位，這裡統一攤平
-    if isinstance(df.columns, __import__("pandas").MultiIndex):
+    if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
+    resample_rule = getattr(config, "RESAMPLE_RULE", None)
+    if resample_rule:
+        df = resample_ohlcv(df, resample_rule)
+        if df.empty:
+            raise RuntimeError(f"{symbol} resample 成 {resample_rule} 後沒有資料")
+
     return df
 
 
