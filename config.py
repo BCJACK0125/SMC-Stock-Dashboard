@@ -7,23 +7,12 @@ config.py
 
 # 股票代號：yfinance 格式。台股請加 .TW（上市）或 .TWO（上櫃）。
 WATCHLIST = [
-    { "symbol": "2330.TW", "name": "台積電" },
-    { "symbol": "2317.TW", "name": "鴻海" },
-    { "symbol": "0050.TW", "name": "元大台灣50" },
-    { "symbol": "AAPL", "name": "Apple" },
-    { "symbol": "NVDA", "name": "NVIDIA" },
-    { "symbol": "BE", "name": "Bloom Energy" },
-    { "symbol": "MU", "name": "美光科技" },
-    { "symbol": "SNDK", "name": "SanDisk" },
-    { "symbol": "LITE", "name": "Lumentum" },
-    { "symbol": "SKHY", "name": "SK海力士" },
-    { "symbol": "SPCX", "name": "SpaceX" },
-    { "symbol": "2327.TW", "name": "國巨" },
-    { "symbol": "MSFT", "name": "微軟" },
-    { "symbol": "PLTR", "name": "Palantir" },
+    {"symbol": "2330.TW", "name": "台積電"},
+    {"symbol": "2317.TW", "name": "鴻海"},
+    {"symbol": "0050.TW", "name": "元大台灣50"},
+    {"symbol": "AAPL",    "name": "Apple"},
+    {"symbol": "NVDA",    "name": "NVIDIA"},
 ]
-
-
 
 # yfinance 下載參數
 # yfinance 沒有原生的 4h 區間，所以做法是抓「小時線」(60m) 回來，
@@ -40,6 +29,14 @@ RESAMPLE_RULE = "4h"     # 把 RAW_INTERVAL 合併成這個週期；不想合併
 # SMC 演算法參數
 SWING_LOOKBACK = 3       # fractal 左右比較根數，越大代表 swing 越「大格局」，雜訊越少
 EQ_TOLERANCE_PCT = 0.0015
+
+# 技術指標共振參數
+ADX_TREND_THRESHOLD = 20    # ADX 高於這個值才視為「趨勢有效」，DI方向才計分
+
+# 輕量 ML 模型參數（GradientBoostingClassifier，見 ml_model.py）
+ML_ENABLED = True
+ML_HORIZON_BARS = 5         # 預測未來幾根K棒的方向（4H下，5根約等於1個交易日）
+ML_MIN_TRAIN_ROWS = 80      # 可訓練樣本數低於此值就不給 ML 分數（避免用太少資料硬訓練）
 
 # 評分機制參數
 RECENT_BARS_FOR_SCORE = 6    # 只看最近幾根K棒內發生的訊號才計分（4H下，6根約等於1個交易日）

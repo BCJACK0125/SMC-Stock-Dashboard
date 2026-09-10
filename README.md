@@ -60,14 +60,50 @@ Branch 選你 push 這個 repo 的分支（例如 `main`）＋ 目錄選 `/ (roo
 ## 你可能想接著調整的地方
 
 - **調整訊號權重／門檻**：`notifier.py` 的 `score()`、`config.py` 的 `ALERT_THRESHOLD`。
+  目前評分滿分 100，拆成三塊：SMC 結構 60 分、技術指標共振 20 分、輕量 ML
+  模型機率 20 分，權重都在 `notifier.py` 檔頭的註解跟 `config.py` 裡可調。
 - **調整 swing 靈敏度**：`config.py` 的 `SWING_LOOKBACK`，數字越大代表只抓「大格局」的
   swing，雜訊（假訊號）越少，但反應會比較慢。
 - **多時間框架（HTF 定方向、LTF 找進場）**：目前為求 GitHub Actions 排程穩定性，
-  全部使用日線（1d）。如果要做真正的多時間框架分析，可以另外對同一標的抓
-  4H / 1H 資料各跑一次 `SMCAnalyzer`，再把兩者的分數加權合併。
+  全部使用同一個時間框架（目前設定為 4H，由小時線 resample 而來）。如果要做真正
+  的多時間框架分析，可以另外對同一標的抓日線資料再跑一次 `SMCAnalyzer`，
+  再把兩者的分數加權合併。
 - **Order Block 定義更嚴謹版本**：目前用「造成突破的最後一根反向K棒」的最寬區間
   （含影線）當作 OB，你也可以改成只用實體(body)範圍，或加上「該K棒之後必須
   有一段強勢位移（displacement）」的條件，減少雜訊 OB。
+
+## 技術指標與 ML 模型（新增）
+
+### 技術指標共振（`indicators.py`）
+在 SMC 結構之外，額外算了業界最常拿來做「多指標確認」的經典技術指標：
+RSI(14)、MACD(12,26,9)、EMA(20/50/200)、ADX+DI(14)、ATR(14)、OBV。
+評分邏輯只在 RSI/MACD/均線排列/ADX+DI 的方向「一致」時才加分，且 ADX 未過
+`ADX_TREND_THRESHOLD`(預設20，代表盤整、沒有值得跟的趨勢)時，DI方向那項不計分。
+圖表下方也會多一張 RSI/MACD 副圖，方便你肉眼覆核分數是怎麼來的，而不是只信
+一個黑盒子數字。
+
+**誠實的免責提醒**：多篇學術研究（含針對台股/恆生/日經的實證論文）指出，單獨
+使用 RSI 或 MACD 長期不必然顯著贏過單純的 buy-and-hold。這裡把它們當成
+「跟 SMC 結構訊號互相驗證的濾網」，而不是宣稱這些指標本身有穩定的超額報酬。
+
+### 輕量 ML 模型（`ml_model.py`）
+用 `scikit-learn` 的 `GradientBoostingClassifier`，每次 GitHub Actions 執行時
+用當下抓到的歷史資料**現場重新訓練**，預測「未來 `ML_HORIZON_BARS` 根K棒後，
+收盤價是否上漲」的機率，機率偏離 50% 越多，加分越多（上限 20分）。
+
+選這個模型是因為：GitHub Actions 免費 runner 只有 CPU、沒有 GPU，執行時間也
+有限制；多篇量化實證研究（Indonesia/Poland/Korea 股市）都顯示梯度提升樹
+（Gradient Boosting / XGBoost 系列）在「股價方向分類」任務上，是 CPU 訓練
+最快、實務中相對穩定的模型類型，複雜度遠低於 LSTM 等深度學習模型，
+也不需要另外存模型權重（每次都重新訓練，架構最單純、不會有版本漂移問題）。
+
+**局限（務必知道）**：訓練樣本通常只有幾百到一千多筆、每天重新訓練，模型容易
+overfit，今天的機率跟明天可能差異不小，本身不構成穩定的預測能力保證。
+資料量不足（`ML_MIN_TRAIN_ROWS`，預設80筆）或標籤嚴重失衡時，程式會自動
+不給這項分數，而不是硬產生一個不可靠的數字。
+
+相關參數都在 `config.py`：`ML_ENABLED`、`ML_HORIZON_BARS`、`ML_MIN_TRAIN_ROWS`、
+`ADX_TREND_THRESHOLD`。
 
 ## 免責聲明
 本專案僅為技術指標的程式化實作與教學示範，所有分數、訊號、圖表僅供研究參考，

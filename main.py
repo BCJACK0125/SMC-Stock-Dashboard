@@ -26,6 +26,8 @@ import yfinance as yf
 from smc.analyzer import SMCAnalyzer
 from plot_report import build_chart_html, build_index_html
 from notifier import score, send_alert_email, get_email_credentials_from_env
+import indicators as ind
+import ml_model
 import config
 
 
@@ -88,11 +90,34 @@ def run(dry_run: bool = False) -> None:
             print(f"[WARN] {symbol} 分析失敗，跳過：{e}", file=sys.stderr)
             continue
 
-        s = score(analyzer, recent_bars=config.RECENT_BARS_FOR_SCORE)
+        # 技術指標（RSI/MACD/EMA/ADX/ATR/OBV）
+        ind_df = ind.compute_indicator_set(analyzer.df)
+
+        # 輕量 ML 模型（資料量不足或類別失衡時，內部會回傳 None，score() 會自動略過這一項）
+        ml_result = None
+        if getattr(config, "ML_ENABLED", True):
+            try:
+                ml_result = ml_model.predict_next_move_probability(
+                    analyzer.df, ind_df,
+                    horizon=config.ML_HORIZON_BARS,
+                    min_train_rows=config.ML_MIN_TRAIN_ROWS,
+                )
+            except Exception as e:
+                print(f"[WARN] {symbol} ML 模型訓練失敗，跳過該項評分：{e}", file=sys.stderr)
+
+        s = score(
+            analyzer,
+            recent_bars=config.RECENT_BARS_FOR_SCORE,
+            ind_df=ind_df,
+            ml_result=ml_result,
+            adx_trend_threshold=config.ADX_TREND_THRESHOLD,
+        )
         last_ev = analyzer.last_structure_event()
         last_event_str = f"{last_ev.type}({'多' if last_ev.side=='bullish' else '空'})" if last_ev else "-"
 
-        chart_html = build_chart_html(symbol, analyzer)
+        chart_html = build_chart_html(symbol, analyzer, ind_df=ind_df)
+        closes = analyzer.df["Close"]
+        prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else None
 
         results.append({
             "symbol": symbol,
@@ -101,8 +126,10 @@ def run(dry_run: bool = False) -> None:
             "bull_score": s["bull_score"],
             "bear_score": s["bear_score"],
             "zone": analyzer.current_zone["zone"] if analyzer.current_zone else "-",
-            "last_close": float(analyzer.df["Close"].iloc[-1]),
+            "last_close": float(closes.iloc[-1]),
+            "prev_close": prev_close,
             "last_event": last_event_str,
+            "ml_prob_up": ml_result["prob_up"] if ml_result else None,
             "alert": max(s["bull_score"], s["bear_score"]) >= config.ALERT_THRESHOLD,
             "generated_at": generated_at,
         })

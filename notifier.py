@@ -5,18 +5,26 @@ notifier.py
 1. score() : 依據多個 SMC 訊號，計算「多方 / 空方綜合分數」(0~100)。
 2. send_alert_email() : 分數超過門檻時，用 Gmail SMTP 寄出通知信。
 
-評分規則（可自行調整權重）：
-    多方分數（bull_score）加分項：
-        +25  目前位於折價區 (discount)
-        +25  存在未被緩解的看漲 Order Block，且價格在最近 N 根K棒內回踩過
-        +20  存在未被回補的看漲 FVG，且價格在最近 N 根K棒內觸碰過
-        +20  最新結構事件為看漲 CHoCH（早期反轉訊號，權重較高）
-        +10  最新結構事件為看漲 BOS（趨勢延續）
-        +10  最近出現流動性掃蕩（EQL 被跌破後又收回，屬於獵取流動性後反轉）
+評分規則（滿分 100，可自行在 config.py 調整權重／門檻）：
 
-    空方分數（bear_score）為上述鏡像規則。
+    A. SMC 結構訊號（滿分 60）
+        +15  目前位於折價區 (discount) / 溢價區 (premium)
+        +15  存在未被緩解的 Order Block，且價格在最近 N 根K棒內回踩過
+        +10  存在未被回補的 FVG，且價格在最近 N 根K棒內觸碰過
+        +15 / +8  最新結構事件為 CHoCH（反轉，權重較高）/ BOS（延續）
+        +7   最近出現流動性掃蕩（EQH/EQL 被穿透後收回）
 
-    兩者獨立計算，可能同時偏高（代表訊號矛盾，不建議進場）。
+    B. 技術指標共振（滿分 20，見 indicators.confluence_signal）
+        RSI 相對50的位置、MACD柱狀圖方向、EMA20/50/200排列、
+        ADX+DI（只有 ADX 過門檻代表「趨勢有效」時才計分），每項 5 分。
+
+    C. 輕量 ML 模型機率（滿分 20，見 ml_model.predict_next_move_probability）
+        用 GradientBoostingClassifier 預測未來 N 根K棒上漲機率，
+        機率偏離 50% 越多、給分越高（線性映射，上限 20分）。
+
+    多空分數各自獨立累加封頂 100；同時偏高代表訊號矛盾，不建議進場。
+    B、C 兩項為「選配」：呼叫 score() 時若不提供 ind_df / ml_result，
+    則只計算 A 項（等同於只用 SMC，分數上限會跟著變成 60）。
 """
 
 from __future__ import annotations
@@ -24,25 +32,33 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict
+from typing import Dict, Optional
 
 from smc.analyzer import SMCAnalyzer
+import indicators as ind
 
 
-def score(analyzer: SMCAnalyzer, recent_bars: int = 5) -> Dict:
+def score(
+    analyzer: SMCAnalyzer,
+    recent_bars: int = 5,
+    ind_df=None,
+    ml_result: Optional[dict] = None,
+    adx_trend_threshold: float = 20.0,
+) -> Dict:
     """回傳 {'bull_score': int, 'bear_score': int, 'reasons_bull': [...], 'reasons_bear': [...]}"""
     df = analyzer.df
     recent_df = df.tail(recent_bars)
     bull_score, bear_score = 0, 0
     reasons_bull, reasons_bear = [], []
 
+    # ------------------------------------------------------------ A. SMC --
     # 1) 溢價 / 折價區
     if analyzer.current_zone:
         if analyzer.current_zone["zone"] == "discount":
-            bull_score += 25
+            bull_score += 15
             reasons_bull.append("價格位於折價區 (Discount Zone)")
         elif analyzer.current_zone["zone"] == "premium":
-            bear_score += 25
+            bear_score += 15
             reasons_bear.append("價格位於溢價區 (Premium Zone)")
 
     # 2) 未緩解 OB 是否近期被回踩
@@ -50,26 +66,26 @@ def score(analyzer: SMCAnalyzer, recent_bars: int = 5) -> Dict:
         if ob.start_index in recent_df.index or (
             recent_df["Low"].min() <= ob.top and recent_df["High"].max() >= ob.bottom
         ):
-            bull_score += 25
+            bull_score += 15
             reasons_bull.append(f"價格回踩看漲 Order Block（{ob.bottom:.2f}~{ob.top:.2f}）")
             break
 
     for ob in analyzer.active_order_blocks("bearish"):
         if recent_df["High"].max() >= ob.bottom and recent_df["Low"].min() <= ob.top:
-            bear_score += 25
+            bear_score += 15
             reasons_bear.append(f"價格觸及看跌 Order Block（{ob.bottom:.2f}~{ob.top:.2f}）")
             break
 
     # 3) 未回補 FVG 是否近期被觸碰
     for fvg in analyzer.active_fvgs("bullish"):
         if recent_df["Low"].min() <= fvg.top and recent_df["High"].max() >= fvg.bottom:
-            bull_score += 20
+            bull_score += 10
             reasons_bull.append(f"價格修補看漲 FVG（{fvg.bottom:.2f}~{fvg.top:.2f}）")
             break
 
     for fvg in analyzer.active_fvgs("bearish"):
         if recent_df["High"].max() >= fvg.bottom and recent_df["Low"].min() <= fvg.top:
-            bear_score += 20
+            bear_score += 10
             reasons_bear.append(f"價格修補看跌 FVG（{fvg.bottom:.2f}~{fvg.top:.2f}）")
             break
 
@@ -77,11 +93,11 @@ def score(analyzer: SMCAnalyzer, recent_bars: int = 5) -> Dict:
     last_ev = analyzer.last_structure_event()
     if last_ev and last_ev.index in recent_df.index:
         if last_ev.side == "bullish":
-            pts = 20 if last_ev.type == "CHoCH" else 10
+            pts = 15 if last_ev.type == "CHoCH" else 8
             bull_score += pts
             reasons_bull.append(f"近期出現看漲 {last_ev.type}")
         else:
-            pts = 20 if last_ev.type == "CHoCH" else 10
+            pts = 15 if last_ev.type == "CHoCH" else 8
             bear_score += pts
             reasons_bear.append(f"近期出現看跌 {last_ev.type}")
 
@@ -89,14 +105,44 @@ def score(analyzer: SMCAnalyzer, recent_bars: int = 5) -> Dict:
     last_close = float(df["Close"].iloc[-1])
     for pool in analyzer.liquidity_pools:
         if pool.kind == "EQL" and recent_df["Low"].min() < pool.price <= last_close:
-            bull_score += 10
+            bull_score += 7
             reasons_bull.append("偵測到流動性掃蕩後收回（EQL Sweep）")
             break
     for pool in analyzer.liquidity_pools:
         if pool.kind == "EQH" and recent_df["High"].max() > pool.price >= last_close:
-            bear_score += 10
+            bear_score += 7
             reasons_bear.append("偵測到流動性掃蕩後收回（EQH Sweep）")
             break
+
+    # ---------------------------------------------------- B. 技術指標共振 --
+    if ind_df is not None and len(ind_df) > 0:
+        conf = ind.confluence_signal(ind_df, adx_trend_threshold=adx_trend_threshold)
+        bull_score += conf["bull_count"] * 5
+        bear_score += conf["bear_count"] * 5
+        if conf["bull_count"]:
+            reasons_bull.append(f"技術指標共振：{conf['bull_count']} 項偏多訊號一致")
+        if conf["bear_count"]:
+            reasons_bear.append(f"技術指標共振：{conf['bear_count']} 項偏空訊號一致")
+
+    # ---------------------------------------------------- C. ML 模型機率 --
+    if ml_result is not None:
+        prob_up = ml_result["prob_up"]
+        if prob_up > 0.5:
+            pts = min(round((prob_up - 0.5) * 40), 20)
+            if pts > 0:
+                bull_score += pts
+                reasons_bull.append(
+                    f"輕量ML模型預測未來{ml_result['horizon']}根K棒上漲機率 {prob_up:.0%}"
+                    f"（訓練樣本 {ml_result['trained_rows']} 筆）"
+                )
+        elif prob_up < 0.5:
+            pts = min(round((0.5 - prob_up) * 40), 20)
+            if pts > 0:
+                bear_score += pts
+                reasons_bear.append(
+                    f"輕量ML模型預測未來{ml_result['horizon']}根K棒上漲機率僅 {prob_up:.0%}"
+                    f"（訓練樣本 {ml_result['trained_rows']} 筆）"
+                )
 
     return {
         "bull_score": min(bull_score, 100),
