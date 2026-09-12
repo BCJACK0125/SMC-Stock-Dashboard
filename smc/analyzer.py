@@ -38,6 +38,7 @@ class SwingPoint:
     price: float
     kind: Literal["high", "low"]
     label: Optional[str] = None  # HH / HL / LH / LL，在結構分析階段補上
+    confirmed_index: Optional[pd.Timestamp] = None  # 這個 swing 要等到「幾根K棒之後」才能被確認
 
 
 @dataclass
@@ -80,6 +81,7 @@ class LiquidityPool:
     index_b: pd.Timestamp
     price: float                 # 兩個高點/低點的平均價
     kind: Literal["EQH", "EQL"]
+    confirmed_index: Optional[pd.Timestamp] = None  # 兩個 swing 都被確認的時間點（較晚的那個）
     swept: bool = False
     swept_index: Optional[pd.Timestamp] = None
 
@@ -151,15 +153,18 @@ class SMCAnalyzer:
         for i in range(n, len(self.df) - n):
             window_high = highs[i - n : i + n + 1]
             window_low = lows[i - n : i + n + 1]
+            confirmed_at = idx[i + n]  # 要等右邊 n 根K棒都出現才能確認這是 swing
 
             # 嚴格大於左右兩側鄰居才算 swing high（避免平台整段都標記）
             if highs[i] > max(np.delete(window_high, n)):
-                swings.append(SwingPoint(index=idx[i], price=float(highs[i]), kind="high"))
+                swings.append(SwingPoint(index=idx[i], price=float(highs[i]), kind="high",
+                                          confirmed_index=confirmed_at))
 
             if lows[i] < min(np.delete(window_low, n)):
-                swings.append(SwingPoint(index=idx[i], price=float(lows[i]), kind="low"))
+                swings.append(SwingPoint(index=idx[i], price=float(lows[i]), kind="low",
+                                          confirmed_index=confirmed_at))
 
-        swings.sort(key=lambda s: s.index)
+        swings.sort(key=lambda s: s.confirmed_index)
 
         # 相鄰同種類 swing 只保留較極端的一個（避免雜訊）
         cleaned: List[SwingPoint] = []
@@ -221,7 +226,7 @@ class SMCAnalyzer:
 
         for i, (ts, close) in enumerate(closes.items()):
             # 把所有發生時間 <= 目前K棒的 swing 納入候選（更新最新的高/低候選）
-            while swing_pointer < len(self.swings) and self.swings[swing_pointer].index <= ts:
+            while swing_pointer < len(self.swings) and self.swings[swing_pointer].confirmed_index <= ts:
                 s = self.swings[swing_pointer]
                 if s.kind == "high":
                     pending_high = s
@@ -381,8 +386,10 @@ class SMCAnalyzer:
                     a, b = points[i], points[j]
                     avg = (a.price + b.price) / 2
                     if abs(a.price - b.price) / avg <= self.eq_tolerance_pct:
+                        confirmed = max(a.confirmed_index, b.confirmed_index)
                         pools.append(LiquidityPool(
                             index_a=a.index, index_b=b.index, price=avg, kind=kind,
+                            confirmed_index=confirmed,
                         ))
 
         find_equal_pairs(highs, "EQH")

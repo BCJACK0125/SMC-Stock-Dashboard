@@ -17,6 +17,7 @@ main.py
 
 from __future__ import annotations
 import argparse
+import json
 import sys
 from datetime import datetime, timezone, timedelta
 
@@ -28,6 +29,7 @@ from plot_report import build_chart_html, build_index_html
 from notifier import score, send_alert_email, get_email_credentials_from_env
 import indicators as ind
 import ml_model
+import backtest
 import config
 
 
@@ -79,6 +81,7 @@ def analyze_symbol(symbol: str) -> SMCAnalyzer:
 def run(dry_run: bool = False) -> None:
     results = []
     alerts = []
+    backtest_all_results = {}
     generated_at = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M (台北時間)")
 
     for item in config.WATCHLIST:
@@ -115,6 +118,21 @@ def run(dry_run: bool = False) -> None:
         last_ev = analyzer.last_structure_event()
         last_event_str = f"{last_ev.type}({'多' if last_ev.side=='bullish' else '空'})" if last_ev else "-"
 
+        # -------------------- Walk-forward 回測：算這檔標的的建議門檻 --------------------
+        try:
+            bt = backtest.run_symbol_backtest(analyzer.df, analyzer, ind_df, config)
+        except Exception as e:
+            print(f"[WARN] {symbol} 回測失敗，改用預設門檻：{e}", file=sys.stderr)
+            bt = {
+                "n_evaluated_bars": 0,
+                "bull": {"threshold": config.ALERT_THRESHOLD, "win_rate": None, "n": 0, "confidence": "insufficient_data"},
+                "bear": {"threshold": config.ALERT_THRESHOLD, "win_rate": None, "n": 0, "confidence": "insufficient_data"},
+                "threshold_sweep": {"bull": [], "bear": []},
+            }
+        bull_threshold = bt["bull"]["threshold"]
+        bear_threshold = bt["bear"]["threshold"]
+        backtest_all_results[symbol] = bt
+
         chart_html = build_chart_html(symbol, analyzer, ind_df=ind_df)
         closes = analyzer.df["Close"]
         prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else None
@@ -130,21 +148,32 @@ def run(dry_run: bool = False) -> None:
             "prev_close": prev_close,
             "last_event": last_event_str,
             "ml_prob_up": ml_result["prob_up"] if ml_result else None,
-            "alert": max(s["bull_score"], s["bear_score"]) >= config.ALERT_THRESHOLD,
+            "alert": s["bull_score"] >= bull_threshold or s["bear_score"] >= bear_threshold,
             "generated_at": generated_at,
+            "bull_threshold": bull_threshold,
+            "bear_threshold": bear_threshold,
+            "backtest": bt,
         })
 
-        if s["bull_score"] >= config.ALERT_THRESHOLD:
+        if s["bull_score"] >= bull_threshold:
             alerts.append({
                 "symbol": symbol, "name": name, "side": "bullish",
                 "score": s["bull_score"], "reasons": s["reasons_bull"],
                 "last_close": float(analyzer.df["Close"].iloc[-1]),
+                "threshold_used": bull_threshold,
+                "backtest_win_rate": bt["bull"]["win_rate"],
+                "backtest_n": bt["bull"]["n"],
+                "backtest_confidence": bt["bull"]["confidence"],
             })
-        if s["bear_score"] >= config.ALERT_THRESHOLD:
+        if s["bear_score"] >= bear_threshold:
             alerts.append({
                 "symbol": symbol, "name": name, "side": "bearish",
                 "score": s["bear_score"], "reasons": s["reasons_bear"],
                 "last_close": float(analyzer.df["Close"].iloc[-1]),
+                "threshold_used": bear_threshold,
+                "backtest_win_rate": bt["bear"]["win_rate"],
+                "backtest_n": bt["bear"]["n"],
+                "backtest_confidence": bt["bear"]["confidence"],
             })
 
     if not results:
@@ -153,6 +182,19 @@ def run(dry_run: bool = False) -> None:
 
     build_index_html(results, output_path=config.OUTPUT_HTML)
     print(f"[INFO] 已產生 {config.OUTPUT_HTML}")
+
+    try:
+        with open(config.BACKTEST_RESULTS_JSON, "w", encoding="utf-8") as f:
+            json.dump(
+                {sym: {
+                    "n_evaluated_bars": bt["n_evaluated_bars"],
+                    "bull": bt["bull"], "bear": bt["bear"],
+                } for sym, bt in backtest_all_results.items()},
+                f, ensure_ascii=False, indent=2,
+            )
+        print(f"[INFO] 已產生 {config.BACKTEST_RESULTS_JSON}")
+    except Exception as e:
+        print(f"[WARN] 回測結果 JSON 寫入失敗（不影響網頁與寄信）：{e}", file=sys.stderr)
 
     if alerts and not dry_run:
         creds = get_email_credentials_from_env()

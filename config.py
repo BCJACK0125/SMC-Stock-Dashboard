@@ -7,22 +7,12 @@ config.py
 
 # 股票代號：yfinance 格式。台股請加 .TW（上市）或 .TWO（上櫃）。
 WATCHLIST = [
-    { "symbol": "2330.TW", "name": "台積電" },
-    { "symbol": "2317.TW", "name": "鴻海" },
-    { "symbol": "0050.TW", "name": "元大台灣50" },
-    { "symbol": "AAPL", "name": "Apple" },
-    { "symbol": "NVDA", "name": "NVIDIA" },
-    { "symbol": "BE", "name": "Bloom Energy" },
-    { "symbol": "MU", "name": "美光科技" },
-    { "symbol": "SNDK", "name": "SanDisk" },
-    { "symbol": "LITE", "name": "Lumentum" },
-    { "symbol": "SKHY", "name": "SK海力士" },
-    { "symbol": "SPCX", "name": "SpaceX" },
-    { "symbol": "2327.TW", "name": "國巨" },
-    { "symbol": "MSFT", "name": "微軟" },
-    { "symbol": "PLTR", "name": "Palantir" },
+    {"symbol": "2330.TW", "name": "台積電"},
+    {"symbol": "2317.TW", "name": "鴻海"},
+    {"symbol": "0050.TW", "name": "元大台灣50"},
+    {"symbol": "AAPL",    "name": "Apple"},
+    {"symbol": "NVDA",    "name": "NVIDIA"},
 ]
-
 
 # yfinance 下載參數
 # yfinance 沒有原生的 4h 區間，所以做法是抓「小時線」(60m) 回來，
@@ -50,7 +40,21 @@ ML_MIN_TRAIN_ROWS = 80      # 可訓練樣本數低於此值就不給 ML 分數�
 
 # 評分機制參數
 RECENT_BARS_FOR_SCORE = 6    # 只看最近幾根K棒內發生的訊號才計分（4H下，6根約等於1個交易日）
-ALERT_THRESHOLD = 60         # 綜合分數 >= 此值才寄信通知
+ALERT_THRESHOLD = 60         # 綜合分數 >= 此值才寄信通知（沒有足夠回測資料時的預設/備援門檻）
+
+# --------------------------------------------------------------------------
+# Walk-forward 回測參數（backtest.py）：每次排程執行時，都會用「不看未來」
+# 的方式回測過去資料，幫每一檔標的分別找出「入場次數 vs 勝率」平衡後的
+# 建議門檻，取代所有標的共用同一個 ALERT_THRESHOLD。
+# --------------------------------------------------------------------------
+BACKTEST_HORIZON_BARS = ML_HORIZON_BARS   # 進場後看幾根K棒的結果來判斷輸贏
+BACKTEST_WARMUP_BARS = 90                 # 前面跳過幾根K棒（等指標/均線資料備齊）
+BACKTEST_ML_RETRAIN_EVERY = 10            # 回測時 ML 模型每隔幾根K棒重新訓練一次
+BACKTEST_CANDIDATE_THRESHOLDS = list(range(35, 90, 5))  # 掃描的候選門檻
+BACKTEST_WIN_RETURN_THRESHOLD = 0.0       # 報酬率超過這個值才算「贏」（0 = 只要方向對就算贏）
+BACKTEST_MIN_TRADES = 8                   # 樣本數至少要幾筆，回測結果才採信
+BACKTEST_TARGET_WIN_RATE = 0.55           # 期望達到的最低歷史勝率
 
 # 輸出的網頁檔名（GitHub Pages 會直接讀取根目錄的 index.html）
 OUTPUT_HTML = "index.html"
+BACKTEST_RESULTS_JSON = "backtest_results.json"  # 回測明細另存一份，方便追蹤歷史演變

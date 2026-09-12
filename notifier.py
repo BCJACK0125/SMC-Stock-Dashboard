@@ -155,7 +155,9 @@ def score(
 def send_alert_email(alerts: list, sender: str, app_password: str, recipient: str) -> None:
     """
     alerts: [{"symbol":..., "name":..., "side": "bullish"/"bearish",
-               "score":..., "reasons":[...], "last_close":...}, ...]
+               "score":..., "reasons":[...], "last_close":...,
+               "threshold_used":..., "backtest_win_rate":..., "backtest_n":...,
+               "backtest_confidence":...}, ...]
     使用 Gmail SMTP (smtp.gmail.com:465, SSL)。
     寄件帳號需先開啟兩步驟驗證，並產生「應用程式密碼」(App Password) 供 app_password 使用，
     不要直接用登入密碼。
@@ -167,8 +169,17 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
     lines = []
     for a in alerts:
         side_label = "多方 🟢" if a["side"] == "bullish" else "空方 🔴"
+        bt_wr = a.get("backtest_win_rate")
+        bt_n = a.get("backtest_n")
+        bt_conf = a.get("backtest_confidence")
+        conf_label = {"ok": "", "low": "（歷史勝率未達標，僅供參考）",
+                      "insufficient_data": "（回測樣本不足，門檻為預設值，僅供參考）"}.get(bt_conf, "")
+        bt_line = (f"  ↳ 回測：門檻 {a.get('threshold_used')} 分過去出現 {bt_n} 次訊號，"
+                   f"歷史勝率 {bt_wr:.0%}{conf_label}") if bt_wr is not None else \
+                  f"  ↳ 回測：樣本不足，使用預設門檻 {a.get('threshold_used')} 分{conf_label}"
         lines.append(
             f"【{a['symbol']} {a['name']}】{side_label} 綜合分數 {a['score']}／收盤 {a['last_close']:.2f}\n"
+            + bt_line + "\n"
             + "\n".join(f"  - {r}" for r in a["reasons"])
         )
     body = "\n\n".join(lines) + "\n\n（本郵件由 GitHub Actions 自動發送，僅供研究參考，非投資建議）"

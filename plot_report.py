@@ -174,6 +174,39 @@ def _zone_class(zone: str) -> str:
     return zone if zone in ("premium", "discount", "equilibrium") else "equilibrium"
 
 
+def _confidence_label(conf: str) -> str:
+    return {"ok": "可信", "low": "勝率未達標", "insufficient_data": "樣本不足"}.get(conf, "—")
+
+
+def _confidence_class(conf: str) -> str:
+    return {"ok": "conf-ok", "low": "conf-low", "insufficient_data": "conf-na"}.get(conf, "conf-na")
+
+
+def _backtest_summary_html(bt: Optional[Dict]) -> str:
+    """把某標的多空兩邊的回測結果，組成一小段摘要 HTML，用在圖表卡片內。"""
+    if not bt:
+        return '<div class="bt-summary muted">尚無回測資料</div>'
+
+    def side_line(label: str, rec: Dict) -> str:
+        wr = rec.get("win_rate")
+        n = rec.get("n", 0)
+        conf = rec.get("confidence", "insufficient_data")
+        wr_txt = f"{wr:.0%}" if wr is not None else "—"
+        return (f'<div class="bt-row">'
+                f'<span class="bt-side">{label}</span>'
+                f'<span class="bt-metric">建議門檻 <b>{rec["threshold"]}</b></span>'
+                f'<span class="bt-metric">歷史勝率 <b>{wr_txt}</b>（{n} 筆訊號）</span>'
+                f'<span class="bt-conf {_confidence_class(conf)}">{_confidence_label(conf)}</span>'
+                f'</div>')
+
+    return (f'<div class="bt-summary">'
+            f'<div class="bt-title">📊 Walk-forward 回測（樣本外，未看未來資料）'
+            f'<span class="muted">· 共評估 {bt.get("n_evaluated_bars", 0)} 根K棒</span></div>'
+            + side_line("多方 Long", bt["bull"])
+            + side_line("空方 Short", bt["bear"])
+            + '</div>')
+
+
 # ---------------------------------------------------------------------------
 # 整頁組合
 # ---------------------------------------------------------------------------
@@ -182,7 +215,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
     results: 每個標的的分析結果字典，需包含：
         symbol, name, chart_html, bull_score, bear_score, zone, last_close,
         last_event(str), alert(bool), generated_at
-        選填：prev_close（用來算漲跌%，沒有就顯示 —）
+        選填：prev_close（用來算漲跌%）、backtest（run_symbol_backtest 的回傳值）
     """
     generated_at = results[0]["generated_at"] if results else ""
 
@@ -238,6 +271,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
             <td><span class="zone-pill zone-{zone_cls}">{_zone_label(r['zone'])}</span></td>
             <td class="num"><div class="score-cell">{_score_bar(r['bull_score'], '--green')}</div></td>
             <td class="num"><div class="score-cell">{_score_bar(r['bear_score'], '--red')}</div></td>
+            <td class="muted">{r.get('bull_threshold', '—')} / {r.get('bear_threshold', '—')}</td>
             <td class="muted">{r['last_event']}</td>
             <td>{_status_badge(r)}</td>
         </tr>"""
@@ -269,6 +303,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
                     {ml_html}
                 </div>
             </div>
+            {_backtest_summary_html(r.get('backtest'))}
             {r['chart_html']}
         </section>"""
 
@@ -413,6 +448,20 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
     .dot-bear {{ background: var(--red); }}
     .dot-ml {{ background: var(--accent-2); }}
 
+    .bt-summary {{
+        background: var(--bg-elevated); border: 1px solid var(--card-border);
+        border-radius: 10px; padding: 12px 14px; margin: 4px 6px 14px; font-size: 12.5px;
+    }}
+    .bt-title {{ font-weight: 700; margin-bottom: 8px; }}
+    .bt-row {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 4px 0; }}
+    .bt-side {{ font-weight: 700; min-width: 78px; }}
+    .bt-metric {{ color: var(--muted); }}
+    .bt-metric b {{ color: var(--text); }}
+    .bt-conf {{ margin-left: auto; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }}
+    .conf-ok {{ background: rgba(22,199,132,0.16); color: var(--green); }}
+    .conf-low {{ background: rgba(245,166,35,0.16); color: var(--amber); }}
+    .conf-na {{ background: rgba(124,134,152,0.16); color: var(--muted); }}
+
     footer {{
         text-align: center; color: var(--muted-2); font-size: 12px;
         padding: 26px 20px; border-top: 1px solid var(--card-border);
@@ -443,7 +492,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
             <thead>
                 <tr>
                     <th>標的</th><th>漲跌%</th><th>收盤</th><th>位階</th>
-                    <th>多方分數</th><th>空方分數</th><th>最新結構事件</th><th>狀態</th>
+                    <th>多方分數</th><th>空方分數</th><th>回測門檻(多/空)</th><th>最新結構事件</th><th>狀態</th>
                 </tr>
             </thead>
             <tbody>
