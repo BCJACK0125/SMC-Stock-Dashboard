@@ -3,29 +3,29 @@
     "n_evaluated_bars": 1359,
     "bull": {
       "threshold": 40,
-      "n": 70,
-      "win_rate": 0.6428571428571429,
+      "n": 74,
+      "win_rate": 0.6891891891891891,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 45,
-      "n": 59,
-      "win_rate": 0.423728813559322,
+      "threshold": 35,
+      "n": 181,
+      "win_rate": 0.3812154696132597,
       "confidence": "low"
     }
   },
   "2317.TW": {
     "n_evaluated_bars": 1357,
     "bull": {
-      "threshold": 45,
-      "n": 11,
-      "win_rate": 0.5454545454545454,
+      "threshold": 35,
+      "n": 211,
+      "win_rate": 0.5023696682464455,
       "confidence": "low"
     },
     "bear": {
-      "threshold": 40,
-      "n": 100,
-      "win_rate": 0.46,
+      "threshold": 50,
+      "n": 12,
+      "win_rate": 0.5,
       "confidence": "low"
     }
   },
@@ -33,14 +33,14 @@
     "n_evaluated_bars": 1349,
     "bull": {
       "threshold": 35,
-      "n": 242,
-      "win_rate": 0.5619834710743802,
+      "n": 244,
+      "win_rate": 0.5573770491803278,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 50,
-      "n": 14,
-      "win_rate": 0.5,
+      "threshold": 45,
+      "n": 35,
+      "win_rate": 0.42857142857142855,
       "confidence": "low"
     }
   },
@@ -168,14 +168,14 @@
     "n_evaluated_bars": 1345,
     "bull": {
       "threshold": 35,
-      "n": 222,
-      "win_rate": 0.5990990990990991,
+      "n": 225,
+      "win_rate": 0.5911111111111111,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 35,
-      "n": 221,
-      "win_rate": 0.48868778280542985,
+      "n": 220,
+      "win_rate": 0.4681818181818182,
       "confidence": "low"
     }
   },
