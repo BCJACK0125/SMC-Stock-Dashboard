@@ -1,70 +1,70 @@
 {
   "2330.TW": {
-    "n_evaluated_bars": 1361,
+    "n_evaluated_bars": 1359,
     "bull": {
       "threshold": 35,
-      "n": 272,
-      "win_rate": 0.5735294117647058,
+      "n": 279,
+      "win_rate": 0.5627240143369175,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 35,
-      "n": 179,
-      "win_rate": 0.39664804469273746,
+      "threshold": 45,
+      "n": 60,
+      "win_rate": 0.43333333333333335,
       "confidence": "low"
     }
   },
   "2317.TW": {
-    "n_evaluated_bars": 1359,
+    "n_evaluated_bars": 1357,
     "bull": {
       "threshold": 35,
-      "n": 212,
-      "win_rate": 0.5094339622641509,
+      "n": 208,
+      "win_rate": 0.49038461538461536,
       "confidence": "low"
     },
     "bear": {
       "threshold": 50,
-      "n": 13,
-      "win_rate": 0.5384615384615384,
+      "n": 24,
+      "win_rate": 0.4583333333333333,
       "confidence": "low"
     }
   },
   "0050.TW": {
-    "n_evaluated_bars": 1351,
+    "n_evaluated_bars": 1349,
     "bull": {
-      "threshold": 35,
-      "n": 242,
-      "win_rate": 0.5537190082644629,
+      "threshold": 40,
+      "n": 63,
+      "win_rate": 0.5873015873015873,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 45,
-      "n": 47,
-      "win_rate": 0.46808510638297873,
+      "n": 50,
+      "win_rate": 0.52,
       "confidence": "low"
     }
   },
   "AAPL": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 45,
-      "n": 18,
-      "win_rate": 0.6111111111111112,
-      "confidence": "ok"
+      "n": 15,
+      "win_rate": 0.5333333333333333,
+      "confidence": "low"
     },
     "bear": {
-      "threshold": 50,
-      "n": 25,
-      "win_rate": 0.56,
-      "confidence": "ok"
+      "threshold": 45,
+      "n": 86,
+      "win_rate": 0.5348837209302325,
+      "confidence": "low"
     }
   },
   "NVDA": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 296,
-      "win_rate": 0.5608108108108109,
+      "n": 301,
+      "win_rate": 0.5647840531561462,
       "confidence": "ok"
     },
     "bear": {
@@ -75,67 +75,67 @@
     }
   },
   "BE": {
-    "n_evaluated_bars": 1610,
+    "n_evaluated_bars": 1608,
     "bull": {
-      "threshold": 45,
-      "n": 20,
-      "win_rate": 0.55,
-      "confidence": "ok"
+      "threshold": 35,
+      "n": 254,
+      "win_rate": 0.5275590551181102,
+      "confidence": "low"
     },
     "bear": {
       "threshold": 50,
-      "n": 14,
-      "win_rate": 0.5714285714285714,
+      "n": 12,
+      "win_rate": 0.6666666666666666,
       "confidence": "ok"
     }
   },
   "MU": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 329,
-      "win_rate": 0.5987841945288754,
+      "n": 323,
+      "win_rate": 0.6160990712074303,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 35,
-      "n": 281,
-      "win_rate": 0.4483985765124555,
+      "threshold": 45,
+      "n": 90,
+      "win_rate": 0.45555555555555555,
       "confidence": "low"
     }
   },
   "SNDK": {
-    "n_evaluated_bars": 695,
+    "n_evaluated_bars": 694,
     "bull": {
       "threshold": 35,
-      "n": 155,
-      "win_rate": 0.6387096774193548,
+      "n": 161,
+      "win_rate": 0.6335403726708074,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 35,
-      "n": 84,
-      "win_rate": 0.32142857142857145,
+      "threshold": 45,
+      "n": 11,
+      "win_rate": 0.36363636363636365,
       "confidence": "low"
     }
   },
   "LITE": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 345,
-      "win_rate": 0.5826086956521739,
+      "n": 346,
+      "win_rate": 0.5895953757225434,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 35,
-      "n": 254,
-      "win_rate": 0.41338582677165353,
+      "n": 249,
+      "win_rate": 0.3895582329317269,
       "confidence": "low"
     }
   },
   "SKHY": {
-    "n_evaluated_bars": 6,
+    "n_evaluated_bars": 7,
     "bull": {
       "threshold": 60,
       "win_rate": null,
@@ -150,7 +150,7 @@
     }
   },
   "SPCX": {
-    "n_evaluated_bars": 44,
+    "n_evaluated_bars": 45,
     "bull": {
       "threshold": 60,
       "win_rate": null,
@@ -165,131 +165,131 @@
     }
   },
   "2327.TW": {
-    "n_evaluated_bars": 1347,
+    "n_evaluated_bars": 1345,
     "bull": {
       "threshold": 35,
-      "n": 226,
-      "win_rate": 0.5929203539823009,
+      "n": 227,
+      "win_rate": 0.5991189427312775,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 40,
-      "n": 115,
-      "win_rate": 0.4782608695652174,
+      "n": 119,
+      "win_rate": 0.4957983193277311,
       "confidence": "low"
     }
   },
   "MSFT": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 45,
-      "n": 56,
-      "win_rate": 0.5714285714285714,
+      "n": 49,
+      "win_rate": 0.5510204081632653,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 50,
-      "n": 43,
-      "win_rate": 0.627906976744186,
-      "confidence": "ok"
-    }
-  },
-  "PLTR": {
-    "n_evaluated_bars": 1611,
-    "bull": {
       "threshold": 35,
-      "n": 307,
-      "win_rate": 0.6319218241042345,
-      "confidence": "ok"
-    },
-    "bear": {
-      "threshold": 50,
-      "n": 11,
-      "win_rate": 0.5454545454545454,
+      "n": 402,
+      "win_rate": 0.48756218905472637,
       "confidence": "low"
     }
   },
-  "AAOI": {
-    "n_evaluated_bars": 1611,
+  "PLTR": {
+    "n_evaluated_bars": 1609,
     "bull": {
-      "threshold": 40,
-      "n": 86,
-      "win_rate": 0.5697674418604651,
+      "threshold": 35,
+      "n": 317,
+      "win_rate": 0.6151419558359621,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 50,
-      "n": 20,
-      "win_rate": 0.65,
+      "n": 12,
+      "win_rate": 0.5833333333333334,
+      "confidence": "ok"
+    }
+  },
+  "AAOI": {
+    "n_evaluated_bars": 1609,
+    "bull": {
+      "threshold": 45,
+      "n": 26,
+      "win_rate": 0.5769230769230769,
+      "confidence": "ok"
+    },
+    "bear": {
+      "threshold": 45,
+      "n": 58,
+      "win_rate": 0.5517241379310345,
       "confidence": "ok"
     }
   },
   "NOK": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 40,
-      "n": 78,
-      "win_rate": 0.6025641025641025,
+      "n": 69,
+      "win_rate": 0.6666666666666666,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 40,
-      "n": 106,
-      "win_rate": 0.4811320754716981,
+      "threshold": 45,
+      "n": 51,
+      "win_rate": 0.5490196078431373,
       "confidence": "low"
     }
   },
   "NOW": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 262,
-      "win_rate": 0.46946564885496184,
+      "n": 274,
+      "win_rate": 0.4781021897810219,
       "confidence": "low"
     },
     "bear": {
-      "threshold": 35,
-      "n": 413,
-      "win_rate": 0.48426150121065376,
+      "threshold": 40,
+      "n": 222,
+      "win_rate": 0.481981981981982,
       "confidence": "low"
     }
   },
   "COHR": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 45,
-      "n": 29,
-      "win_rate": 0.5517241379310345,
-      "confidence": "ok"
+      "n": 28,
+      "win_rate": 0.5357142857142857,
+      "confidence": "low"
     },
     "bear": {
-      "threshold": 50,
-      "n": 9,
-      "win_rate": 0.4444444444444444,
+      "threshold": 35,
+      "n": 249,
+      "win_rate": 0.4497991967871486,
       "confidence": "low"
     }
   },
   "AVGO": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
       "n": 303,
-      "win_rate": 0.5742574257425742,
+      "win_rate": 0.5808580858085809,
       "confidence": "ok"
     },
     "bear": {
       "threshold": 35,
-      "n": 198,
-      "win_rate": 0.398989898989899,
+      "n": 199,
+      "win_rate": 0.4020100502512563,
       "confidence": "low"
     }
   },
   "MRVL": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 285,
-      "win_rate": 0.5087719298245614,
+      "n": 283,
+      "win_rate": 0.5017667844522968,
       "confidence": "low"
     },
     "bear": {
@@ -300,77 +300,77 @@
     }
   },
   "AMZN": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 40,
-      "n": 79,
-      "win_rate": 0.5443037974683544,
+      "n": 80,
+      "win_rate": 0.5125,
       "confidence": "low"
     },
     "bear": {
       "threshold": 35,
-      "n": 315,
-      "win_rate": 0.4,
+      "n": 306,
+      "win_rate": 0.4117647058823529,
       "confidence": "low"
     }
   },
   "GOOG": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 40,
-      "n": 120,
-      "win_rate": 0.5416666666666666,
-      "confidence": "low"
+      "n": 109,
+      "win_rate": 0.5504587155963303,
+      "confidence": "ok"
     },
     "bear": {
       "threshold": 35,
-      "n": 225,
-      "win_rate": 0.4311111111111111,
+      "n": 218,
+      "win_rate": 0.41284403669724773,
       "confidence": "low"
     }
   },
   "AMD": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 40,
-      "n": 43,
-      "win_rate": 0.5348837209302325,
-      "confidence": "low"
+      "n": 47,
+      "win_rate": 0.574468085106383,
+      "confidence": "ok"
     },
     "bear": {
       "threshold": 40,
-      "n": 181,
-      "win_rate": 0.585635359116022,
+      "n": 192,
+      "win_rate": 0.5520833333333334,
       "confidence": "ok"
     }
   },
   "INTC": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 35,
-      "n": 229,
-      "win_rate": 0.5021834061135371,
+      "n": 232,
+      "win_rate": 0.5129310344827587,
       "confidence": "low"
     },
     "bear": {
       "threshold": 45,
-      "n": 116,
-      "win_rate": 0.5948275862068966,
+      "n": 101,
+      "win_rate": 0.6336633663366337,
       "confidence": "ok"
     }
   },
   "DELL": {
-    "n_evaluated_bars": 1611,
+    "n_evaluated_bars": 1609,
     "bull": {
       "threshold": 45,
-      "n": 50,
-      "win_rate": 0.58,
+      "n": 46,
+      "win_rate": 0.6304347826086957,
       "confidence": "ok"
     },
     "bear": {
-      "threshold": 40,
-      "n": 143,
-      "win_rate": 0.3706293706293706,
+      "threshold": 45,
+      "n": 73,
+      "win_rate": 0.3835616438356164,
       "confidence": "low"
     }
   }
