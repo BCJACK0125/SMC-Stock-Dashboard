@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 本機分析產出（不進版控：體積大且可重新產生）
+validation_results.json
+weight_fit_results.json
+*.pkl
+
+# 編輯器
+.vscode/
+.idea/
