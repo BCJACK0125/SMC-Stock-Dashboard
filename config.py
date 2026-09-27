@@ -336,6 +336,19 @@ ALERT_COOLDOWN_DAYS = 5          # 同一標的同方向，幾天內不重複通
 ALERT_RENOTIFY_SCORE_JUMP = 15   # 但分數變化超過這麼多分，視為新訊號重新通知
 ALERT_STATE_JSON = "alert_state.json"
 
+# --------------------------------------------------------------------------
+# 回測快取（backtest_cache.py）
+#
+# 完整 walk-forward 是每日流程最重的一步（25 檔 × 約 2,250 根，實測
+# 20~30 分鐘），但結果每天幾乎不變——多一根 K 棒不會改變用 2,250 根算
+# 出來的門檻。改成每 N 天重算一次，平日執行可降到 1 分鐘以內。
+#
+# 快取鍵含「設定指紋」：任何影響回測的參數變動都會自動失效，不需要
+# 記得手動清快取。
+# --------------------------------------------------------------------------
+BACKTEST_CACHE_JSON = "backtest_cache.json"
+BACKTEST_CACHE_DAYS = 7          # 幾天重算一次；設 0 等於停用快取
+
 # 輸出的網頁檔名（GitHub Pages 會直接讀取根目錄的 index.html）
 OUTPUT_HTML = "index.html"
 BACKTEST_RESULTS_JSON = "backtest_results.json"  # 回測明細另存一份，方便追蹤歷史演變

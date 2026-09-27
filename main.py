@@ -27,6 +27,7 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 
+import backtest_cache
 import concentration
 import position_sizing
 import trade_model
@@ -174,6 +175,8 @@ def run(dry_run: bool = False) -> None:
     alerts = []
     backtest_all_results = {}
     close_series = {}          # 供集中度分析用
+    bt_cache = backtest_cache.load(getattr(config, "BACKTEST_CACHE_JSON", "backtest_cache.json"))
+    n_cached = n_computed = 0
     generated_at = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M (台北時間)")
 
     for item in config.WATCHLIST:
@@ -216,7 +219,18 @@ def run(dry_run: bool = False) -> None:
         # -------------------- Walk-forward 回測：算這檔標的的建議門檻 --------------------
         cost = config.transaction_cost(symbol, item.get("etf", False))
         try:
-            bt = backtest.run_symbol_backtest(analyzer.df, analyzer, ind_df, config, cost=cost)
+            # 完整 walk-forward 很重但結果每天幾乎不變，所以快取；
+            # 設定一改，指紋就變，快取自動失效。
+            bt, hit = backtest_cache.get_or_compute(
+                bt_cache, symbol, config,
+                lambda: backtest.run_symbol_backtest(
+                    analyzer.df, analyzer, ind_df, config, cost=cost),
+                max_age_days=getattr(config, "BACKTEST_CACHE_DAYS", 7))
+            if hit:
+                bt = backtest_cache.restore_timestamps(bt)
+                n_cached += 1
+            else:
+                n_computed += 1
         except Exception as e:
             print(f"[WARN] {symbol} 回測失敗，改用預設門檻：{e}", file=sys.stderr)
             _empty = {"threshold": config.ALERT_THRESHOLD, "n": 0, "wins": 0,
@@ -355,6 +369,9 @@ def run(dry_run: bool = False) -> None:
                 print(f"[INFO] {line}")
         except Exception as e:
             print(f"[WARN] 集中度分析失敗（不影響寄信）：{e}", file=sys.stderr)
+
+    if backtest_cache.save(getattr(config, "BACKTEST_CACHE_JSON", "backtest_cache.json"), bt_cache):
+        print(f"[INFO] 回測快取：沿用 {n_cached} 檔、重算 {n_computed} 檔")
 
     build_index_html(results, output_path=config.OUTPUT_HTML,
                      concentration_note=concentration_note)

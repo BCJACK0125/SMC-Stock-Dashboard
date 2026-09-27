@@ -46,7 +46,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # alert_state.json 一定要一起 commit，否則每次 runner 都是全新環境、
           # 去重狀態歸零，同一個訊號還是會天天重寄。
-          git add backtest_results.json alert_state.json
+          git add backtest_results.json alert_state.json backtest_cache.json
           git diff --quiet --cached || git commit -m "chore: update backtest + alert state $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
 
