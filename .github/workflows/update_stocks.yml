@@ -46,7 +46,14 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # alert_state.json 一定要一起 commit，否則每次 runner 都是全新環境、
           # 去重狀態歸零，同一個訊號還是會天天重寄。
-          git add backtest_results.json alert_state.json backtest_cache.json
+          #
+          # 逐一檢查存在才 add：alert_state.json 只在「成功寄出警報信」時
+          # 才會產生（刻意的設計——寄失敗就不記錄，否則該訊號會被冷卻期
+          # 永久靜音）。沒有訊號的日子它不存在，而 `git add` 對不存在的
+          # 檔案會回傳 128 讓整個 step 失敗。
+          for f in backtest_results.json alert_state.json backtest_cache.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           git diff --quiet --cached || git commit -m "chore: update backtest + alert state $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
 
