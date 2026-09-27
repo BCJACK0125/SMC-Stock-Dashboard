@@ -28,6 +28,8 @@ from typing import List, Optional, Literal
 import pandas as pd
 import numpy as np
 
+from indicators import atr as _atr   # 共用同一套 ATR 實作，避免公式漂移
+
 
 Side = Literal["bullish", "bearish"]
 
@@ -107,6 +109,7 @@ class SMCAnalyzer:
         swing_lookback: int = 2,
         eq_tolerance_pct: float = 0.0015,   # EQH/EQL 容許誤差（0.15%）
         fvg_min_gap_pct: float = 0.0,       # 缺口最小寬度（相對價格），0 = 不過濾
+        fvg_min_gap_atr: float = 0.0,       # 缺口最小寬度（相對 ATR），0 = 不過濾
     ):
         required_cols = {"Open", "High", "Low", "Close"}
         missing = required_cols - set(df.columns)
@@ -118,6 +121,7 @@ class SMCAnalyzer:
         self.swing_lookback = swing_lookback
         self.eq_tolerance_pct = eq_tolerance_pct
         self.fvg_min_gap_pct = fvg_min_gap_pct
+        self.fvg_min_gap_atr = fvg_min_gap_atr
 
         self.swings: List[SwingPoint] = []
         self.structure_events: List[StructureEvent] = []
@@ -138,6 +142,7 @@ class SMCAnalyzer:
         self._find_liquidity_pools()
         self._update_premium_discount_zone()
         self._update_mitigation_status()
+        self._update_liquidity_sweeps()
         return self
 
     # ------------------------------------------------------------------
@@ -218,56 +223,51 @@ class SMCAnalyzer:
         struct_high: Optional[SwingPoint] = None  # 目前有效的結構高點
         struct_low: Optional[SwingPoint] = None   # 目前有效的結構低點
 
-        # 依時間序，把 swings 逐一「登記」為候選結構位，並在後續K棒中
-        # 檢查是否已被收盤價突破。
-        swing_pointer = 0
-        pending_high: Optional[SwingPoint] = None
-        pending_low: Optional[SwingPoint] = None
+        # 已經被突破過的結構位，記下它的時間戳；之後只有「更新的」swing
+        # 才能接手成為結構位，同一個 swing 不會被重複突破。
+        broken_high_idx: Optional[pd.Timestamp] = None
+        broken_low_idx: Optional[pd.Timestamp] = None
 
-        for i, (ts, close) in enumerate(closes.items()):
-            # 把所有發生時間 <= 目前K棒的 swing 納入候選（更新最新的高/低候選）
+        swing_pointer = 0
+
+        for ts, close in closes.items():
+            # 每當有新的 swing 被「確認」，就讓它接手成為目前的結構位
+            # （結構位永遠是最近一個尚未被突破的 swing）。
             while swing_pointer < len(self.swings) and self.swings[swing_pointer].confirmed_index <= ts:
                 s = self.swings[swing_pointer]
-                if s.kind == "high":
-                    pending_high = s
-                else:
-                    pending_low = s
                 swing_pointer += 1
-
-            if struct_high is None and pending_high is not None:
-                struct_high = pending_high
-            if struct_low is None and pending_low is not None:
-                struct_low = pending_low
-
-            if struct_high is None or struct_low is None:
-                continue  # 資料剛開始，結構位還沒建立完成
+                if s.kind == "high":
+                    if broken_high_idx is None or s.index > broken_high_idx:
+                        struct_high = s
+                else:
+                    if broken_low_idx is None or s.index > broken_low_idx:
+                        struct_low = s
 
             # 檢查是否突破結構高點（向上）
-            if close > struct_high.price and struct_high.index < ts:
-                side: Side = "bullish"
+            if struct_high is not None and close > struct_high.price and struct_high.index < ts:
                 ev_type = "BOS" if trend == "bullish" else "CHoCH" if trend is not None else "BOS"
                 events.append(StructureEvent(
-                    index=ts, price=float(close), type=ev_type, side=side,
+                    index=ts, price=float(close), type=ev_type, side="bullish",
                     broken_level=struct_high.price, broken_index=struct_high.index,
                 ))
                 trend = "bullish"
-                struct_high = pending_high if (pending_high and pending_high.index <= ts and pending_high.price > struct_high.price) else struct_high
-                # 突破後，舊的結構高點失效，等待下一個新高點出現前，暫用最新 pending_high
-                struct_high = pending_high
-                struct_low = pending_low if pending_low and pending_low.index <= ts else struct_low
+                # 舊的結構高點已失效，清空並等下一個新的 swing high 被確認。
+                # 舊版在這裡把它設回同一個 pending_high，導致之後每一根收在
+                # 其上的K棒都會再報一次同樣的 BOS。
+                broken_high_idx = struct_high.index
+                struct_high = None
                 continue
 
             # 檢查是否跌破結構低點（向下）
-            if close < struct_low.price and struct_low.index < ts:
-                side = "bearish"
+            if struct_low is not None and close < struct_low.price and struct_low.index < ts:
                 ev_type = "BOS" if trend == "bearish" else "CHoCH" if trend is not None else "BOS"
                 events.append(StructureEvent(
-                    index=ts, price=float(close), type=ev_type, side=side,
+                    index=ts, price=float(close), type=ev_type, side="bearish",
                     broken_level=struct_low.price, broken_index=struct_low.index,
                 ))
                 trend = "bearish"
-                struct_low = pending_low
-                struct_high = pending_high if pending_high and pending_high.index <= ts else struct_high
+                broken_low_idx = struct_low.index
+                struct_low = None
                 continue
 
         self.structure_events = events
@@ -290,15 +290,13 @@ class SMCAnalyzer:
         obs: List[OrderBlock] = []
 
         for ev in self.structure_events:
-            # 往回找「broken_index 之前」到「event index」之間的K棒，
-            # 找最後一根反向K棒作為 OB 候選。
-            window = df.loc[:ev.index]
-            window = window[window.index <= ev.index]
-            if len(window) < 2:
-                continue
-
-            # 只在 broken_index 之前的區段找（避免抓到突破後才出現的K棒）
-            search_window = df.loc[:ev.broken_index]
+            # OB = 造成這段推動的「最後一根反向K棒」，所以只能在「被突破的
+            # swing」到「突破確認」之間這段推動腿裡面找。
+            # 舊版用 df.loc[:ev.broken_index]，那是「從資料最開頭到被突破的
+            # swing」，抓到的是推動段之前、毫不相干的某根K棒。
+            # 排除突破棒自己（.iloc[:-1]）：OB 是推動「之前」的最後一根反向棒，
+            # 突破棒即使收黑也不該被當成 OB。
+            search_window = df.loc[ev.broken_index:ev.index].iloc[:-1]
             if search_window.empty:
                 continue
 
@@ -348,6 +346,21 @@ class SMCAnalyzer:
         n = len(df)
         fvgs: List[FairValueGap] = []
 
+        # 用 ATR 當作「這根K棒的正常波動幅度」基準，濾掉雜訊級的小缺口。
+        # 不用固定百分比，是因為不同標的、不同時期的波動度差很多：實測台股
+        # 的 gap/ATR 系統性高於美股，固定百分比會在兩邊行為不一致。
+        atr_series = _atr(df) if self.fvg_min_gap_atr > 0 else None
+
+        def gap_is_significant(gap: float, ref_price: float, ts: pd.Timestamp) -> bool:
+            if self.fvg_min_gap_pct > 0 and gap / ref_price < self.fvg_min_gap_pct:
+                return False
+            if atr_series is not None:
+                a = float(atr_series.loc[ts])
+                # ATR 尚未暖機完成（前幾根）時不做過濾，避免把開頭全砍掉
+                if a > 0 and gap / a < self.fvg_min_gap_atr:
+                    return False
+            return True
+
         for i in range(1, n - 1):
             k1 = df.iloc[i - 1]
             k3 = df.iloc[i + 1]
@@ -355,7 +368,7 @@ class SMCAnalyzer:
 
             if k1["High"] < k3["Low"]:
                 gap = k3["Low"] - k1["High"]
-                if self.fvg_min_gap_pct == 0 or gap / k1["High"] >= self.fvg_min_gap_pct:
+                if gap_is_significant(gap, k1["High"], k3_ts):
                     fvgs.append(FairValueGap(
                         start_index=k1_ts, end_index=k3_ts,
                         top=float(k3["Low"]), bottom=float(k1["High"]),
@@ -363,7 +376,7 @@ class SMCAnalyzer:
                     ))
             elif k1["Low"] > k3["High"]:
                 gap = k1["Low"] - k3["High"]
-                if self.fvg_min_gap_pct == 0 or gap / k1["Low"] >= self.fvg_min_gap_pct:
+                if gap_is_significant(gap, k1["Low"], k3_ts):
                     fvgs.append(FairValueGap(
                         start_index=k1_ts, end_index=k3_ts,
                         top=float(k1["Low"]), bottom=float(k3["High"]),
@@ -434,13 +447,17 @@ class SMCAnalyzer:
         df = self.df
 
         for ob in self.order_blocks:
-            after = df[df.index > ob.start_index]
+            # OB 要等「造成它的那段推動」(BOS/CHoCH) 確認之後才算成立。
+            # 從 start_index 起算是錯的：OB 本來就是推動段起點那根K棒，
+            # 緊接著的K棒必然還在它附近，會被誤判成一形成就被緩解。
+            since = ob.caused_structure.index if ob.caused_structure else ob.start_index
+            after = df[df.index > since]
             if after.empty:
                 continue
-            if ob.side == "bullish":
-                touched = after[after["Low"] <= ob.top]
-            else:
-                touched = after[after["High"] >= ob.bottom]
+            # 緩解 = 價格「重新進入」[bottom, top] 區間（兩區間重疊）。
+            # 舊版用單邊條件（Low <= top / High >= bottom），對任何一根位置
+            # 正常的K棒幾乎恆真，等於所有 OB 都會立刻失效。
+            touched = after[(after["Low"] <= ob.top) & (after["High"] >= ob.bottom)]
             if not touched.empty:
                 ob.mitigated = True
                 ob.mitigated_index = touched.index[0]
@@ -457,6 +474,29 @@ class SMCAnalyzer:
                 fvg.filled = True
                 fvg.filled_index = touched.index[0]
                 fvg.fill_ratio = 1.0  # 簡化：只要碰到就視為已回補，不做部分回補比例計算
+
+    # ------------------------------------------------------------------
+    # 8. 更新流動性池的掃蕩（sweep）狀態
+    #    EQH/EQL 之所以是「流動性池」，是因為停損單堆在那裡；價格穿過去
+    #    把單子掃掉（sweep）之後常常反轉，這才是可交易的訊號。
+    #    LiquidityPool.swept / swept_index 兩個欄位原本宣告了卻從來沒有人
+    #    賦值，所以永遠是 False——這裡把它補上。
+    # ------------------------------------------------------------------
+    def _update_liquidity_sweeps(self) -> None:
+        df = self.df
+        for pool in self.liquidity_pools:
+            # 兩個 swing 都被確認之後，這個池子才算「存在」
+            since = pool.confirmed_index or max(pool.index_a, pool.index_b)
+            after = df[df.index > since]
+            if after.empty:
+                continue
+            if pool.kind == "EQH":
+                pierced = after[after["High"] > pool.price]
+            else:
+                pierced = after[after["Low"] < pool.price]
+            if not pierced.empty:
+                pool.swept = True
+                pool.swept_index = pierced.index[0]
 
     # ------------------------------------------------------------------
     # 便利方法：取得目前仍「未被緩解」的 OB / FVG
