@@ -267,6 +267,11 @@ def test_trailing_needs_a_long_time_stop_to_work():
     assert long_stop.return_pct > short_stop.return_pct
 
 
+def test_config_gives_trailing_a_longer_time_stop():
+    import config
+    assert (config.TRADE_TRAILING_MAX_HOLDING_BARS
+            > config.TRADE_MAX_HOLDING_BARS)
+
 
 # --------------------------------------------------------------------------
 # 停損縮放（覆盤發現：獲利單的 MAE 中位數只有初始風險的 16%）
@@ -419,3 +424,13 @@ def test_describe_mentions_the_fallback():
     from trade_model import plan_entry
     assert "市價" in plan_entry(100.0, 4.0).describe()
     assert "放棄" in plan_entry(100.0, 4.0, fallback="skip").describe()
+
+
+def test_config_gives_trailing_a_longer_time_stop():
+    """
+    移動停損配上短時間停損等於自廢武功——趨勢單會在還沒跑完就被砍掉。
+    config 因此為兩種出場模式分開設定時間停損長度。
+    """
+    import config
+    assert (config.TRADE_TRAILING_MAX_HOLDING_BARS
+            > config.TRADE_MAX_HOLDING_BARS)

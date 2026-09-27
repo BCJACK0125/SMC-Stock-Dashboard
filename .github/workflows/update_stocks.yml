@@ -3,11 +3,9 @@ name: Update SMC Stock Dashboard
 on:
   schedule:
     # cron 使用 UTC 時間。台北時間(UTC+8) 18:00 = UTC 10:00。
-    # 目前資料週期已改成 4H：這個排程每天只跑一次，抓到的是「當下最新的
-    # 4H 收盤資料」，網頁跟警報都只會反映到最近一次 4H 收盤。
-    # 若想要更即時（例如每根 4H K 棒收盤就立刻檢查一次），可以把下面
-    # 這行改成一天跑多次，例如 "0 2,6,10,14 * * 1-5"（自行對應交易時段）。
-    - cron: "0 2,6,10,14 * * 1-5"
+    # 資料週期是日線，所以一天跑一次就夠——台股 13:30 收盤(UTC 05:30)、
+    # 美股前一夜已收，這個時間點兩邊的當日 K 棒都已經確定。
+    - cron: "0 10 * * *"
   workflow_dispatch: {}   # 允許在 GitHub 網頁上手動點擊執行，方便測試
 
 permissions:
@@ -38,10 +36,31 @@ jobs:
         run: |
           python main.py
 
-      - name: Commit and push updated dashboard
+      # index.html 約 300KB，每天 commit 一次的話一年會在 git 歷史裡累積
+      # 上百 MB（內嵌的圖表 JSON 每天都不一樣，跨版本幾乎壓不掉）。
+      # 所以網頁推到一個「只有單一 commit」的 orphan 分支，每次強制覆蓋，
+      # 歷史不累積；體積小又有追蹤價值的 JSON 才留在主分支。
+      - name: Commit state files to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html backtest_results.json
-          git diff --quiet --cached || git commit -m "chore: auto-update SMC dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
+          # alert_state.json 一定要一起 commit，否則每次 runner 都是全新環境、
+          # 去重狀態歸零，同一個訊號還是會天天重寄。
+          git add backtest_results.json alert_state.json
+          git diff --quiet --cached || git commit -m "chore: update backtest + alert state $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
+
+      - name: Publish dashboard to gh-pages (single-commit branch)
+        run: |
+          tmp=$(mktemp -d)
+          cp index.html "$tmp/"
+          touch "$tmp/.nojekyll"
+          cd "$tmp"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "dashboard $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push -q --force \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" \
+            HEAD:gh-pages
