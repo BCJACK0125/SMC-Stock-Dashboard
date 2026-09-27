@@ -286,6 +286,14 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
                 f"  ▸ 停損：{tp.stop:.2f}（{src}），"
                 f"風險 {abs(tp.entry - tp.stop) / tp.entry:.1%}")
             order_lines.append("  ▸ 出場：移動停損 2×ATR，不設固定目標（讓獲利奔跑）")
+        sz = a.get("sizing")
+        if sz:
+            if sz.get("fraction", 0) > 0:
+                order_lines.append(
+                    f"  ▸ 部位：{sz['fraction']:.1%}（1/{sz.get('kelly_divisor', 4):.0f} Kelly；"
+                    f"歷史先碰停利機率下界 {sz['p_lower']:.0%}，{sz['n']} 筆隨機進場樣本）")
+            else:
+                order_lines.append(f"  ▸ 部位：不建議下注 — {sz.get('reason', '')}")
         order_block = ("\n" + "\n".join(order_lines)) if order_lines else ""
 
         lines.append(

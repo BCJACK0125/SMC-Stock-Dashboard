@@ -28,6 +28,7 @@ import pandas as pd
 import yfinance as yf
 
 import concentration
+import position_sizing
 import trade_model
 from smc.analyzer import SMCAnalyzer
 from plot_report import build_chart_html, build_index_html
@@ -254,6 +255,9 @@ def run(dry_run: bool = False) -> None:
             "bear_threshold": bear_threshold,
             "backtest": bt,
             "performance": bt["bull"].get("performance"),
+            "entry_plan": entry_plan,
+            "trade_plan": trade_plan,
+            "sizing": sizing,
         })
 
         only_proven = getattr(config, "ALERT_ONLY_WHEN_EDGE_PROVEN", False)
@@ -273,6 +277,30 @@ def run(dry_run: bool = False) -> None:
             analyzer, "bullish", float(closes.iloc[-1]), atr_now,
             **backtest.trade_config(config)) if atr_now > 0 else None
 
+        # 部位建議：用隨機進場的三重障礙統計，量「這檔對這套出場結構的
+        # 適配度」。不依賴訊號有預測力——訊號超額不顯著，所以不採計。
+        sizing = None
+        if getattr(config, "SIZING_ENABLED", True) and trade_plan is not None:
+            try:
+                risks = [t.get("risk_pct") for t in (bt.get("trades") or [])
+                         if t.get("risk_pct")]
+                if not risks:
+                    risks = [abs(trade_plan.entry - trade_plan.stop) / trade_plan.entry]
+                st = position_sizing.random_entry_barrier_stats(
+                    analyzer.df, risks,
+                    rr=config.SIZING_RR,
+                    max_bars=getattr(config, "TRADE_TRAILING_MAX_HOLDING_BARS", 250),
+                    warmup=config.BACKTEST_WARMUP_BARS,
+                    n_samples=config.SIZING_SAMPLES)
+                sizing = position_sizing.suggest_position(
+                    st["wins"], st["n_resolved"], rr=config.SIZING_RR,
+                    kelly_divisor=config.SIZING_KELLY_DIVISOR,
+                    max_fraction=config.SIZING_MAX_FRACTION,
+                    min_samples=config.SIZING_MIN_SAMPLES)
+            except Exception as e:
+                print(f"[WARN] {symbol} 部位建議計算失敗（不影響其他輸出）：{e}",
+                      file=sys.stderr)
+
         if s["bull_score"] >= bull_threshold and worth_alerting("bull"):
             alerts.append({
                 "symbol": symbol, "name": name, "side": "bullish",
@@ -289,6 +317,7 @@ def run(dry_run: bool = False) -> None:
                 "performance": bt["bull"].get("performance"),
                 "entry_plan": entry_plan,
                 "trade_plan": trade_plan,
+                "sizing": sizing,
             })
         if s["bear_score"] >= bear_threshold and worth_alerting("bear"):
             alerts.append({

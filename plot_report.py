@@ -322,6 +322,18 @@ def _entry_plan_html(results: List[Dict]) -> str:
         conf = (r.get("backtest") or {}).get("bull", {}).get("confidence", "")
         warn = ('<div class="act-warn">⚠️ 此標的回測未能證實正期望值，'
                 '訊號僅供參考</div>') if conf != "ok" else ""
+        sz = r.get("sizing")
+        size_html = ""
+        if sz:
+            if sz.get("fraction", 0) > 0:
+                size_html = (f'<div class="act-row"><span>部位</span>'
+                             f'<b>{sz["fraction"]:.1%}</b>'
+                             f'<span class="muted">1/{sz.get("kelly_divisor", 4):.0f} Kelly · '
+                             f'先碰停利機率下界 {sz["p_lower"]:.0%}</span></div>')
+            else:
+                size_html = ('<div class="act-row"><span>部位</span>'
+                             '<b>不建議</b>'
+                             f'<span class="muted">{sz.get("reason", "")}</span></div>')
         stop_html = ""
         if tp is not None:
             src = "OB 下緣" if tp.stop_source == "order_block" else "ATR 距離"
@@ -338,6 +350,7 @@ def _entry_plan_html(results: List[Dict]) -> str:
             {stop_html}
             <div class="act-row"><span>出場</span><b>移動停損</b>
                 <span class="muted">2×ATR，不設固定目標</span></div>
+            {size_html}
             {warn}
         </div>"""
     return f'<div class="act-grid">{cards}</div>'
