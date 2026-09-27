@@ -175,11 +175,13 @@ def _zone_class(zone: str) -> str:
 
 
 def _confidence_label(conf: str) -> str:
-    return {"ok": "可信", "low": "勝率未達標", "insufficient_data": "樣本不足"}.get(conf, "—")
+    return {"ok": "可信", "low": "勝率下界未達標", "no_edge": "無可證實優勢",
+            "insufficient_data": "樣本不足"}.get(conf, "—")
 
 
 def _confidence_class(conf: str) -> str:
-    return {"ok": "conf-ok", "low": "conf-low", "insufficient_data": "conf-na"}.get(conf, "conf-na")
+    return {"ok": "conf-ok", "low": "conf-low", "no_edge": "conf-low",
+            "insufficient_data": "conf-na"}.get(conf, "conf-na")
 
 
 def _backtest_summary_html(bt: Optional[Dict]) -> str:
@@ -191,26 +193,151 @@ def _backtest_summary_html(bt: Optional[Dict]) -> str:
         wr = rec.get("win_rate")
         n = rec.get("n", 0)
         conf = rec.get("confidence", "insufficient_data")
-        wr_txt = f"{wr:.0%}" if wr is not None else "—"
+        exp_ = rec.get("expectancy")
+        exp_lb = rec.get("expectancy_lb")
+        payoff = rec.get("payoff")
+
+        # 期望值（已扣來回交易成本）是挑門檻時實際採用的判準，擺第一個；
+        # 勝率單獨看會騙人，所以一定跟賠率並列。
+        exp_txt = (f'<span class="bt-metric">扣成本期望 <b>{exp_:+.2%}</b>'
+                   + (f' <span class="muted">(下界 {exp_lb:+.2%})</span>' if exp_lb is not None else "")
+                   + "</span>") if exp_ is not None else ""
+        wr_txt = (f'<span class="bt-metric">勝率 <b>{wr:.0%}</b>'
+                  + (f" × 賠率 <b>{payoff:.2f}</b>" if payoff else "")
+                  + f'（{n} 筆不重疊）</span>') if wr is not None else                  f'<span class="bt-metric muted">（{n} 筆）</span>'
         return (f'<div class="bt-row">'
                 f'<span class="bt-side">{label}</span>'
                 f'<span class="bt-metric">建議門檻 <b>{rec["threshold"]}</b></span>'
-                f'<span class="bt-metric">歷史勝率 <b>{wr_txt}</b>（{n} 筆訊號）</span>'
+                + exp_txt + wr_txt +
                 f'<span class="bt-conf {_confidence_class(conf)}">{_confidence_label(conf)}</span>'
                 f'</div>')
 
     return (f'<div class="bt-summary">'
             f'<div class="bt-title">📊 Walk-forward 回測（樣本外，未看未來資料）'
-            f'<span class="muted">· 共評估 {bt.get("n_evaluated_bars", 0)} 根K棒</span></div>'
+            f'<span class="muted">· 共評估 {bt.get("n_evaluated_bars", 0)} 根K棒'
+            f'· 來回成本 {bt.get("cost", 0):.2%}</span></div>'
             + side_line("多方 Long", bt["bull"])
             + side_line("空方 Short", bt["bear"])
+            + _performance_html(bt)
             + '</div>')
+
+
+def _performance_html(bt: Optional[Dict]) -> str:
+    """複利績效 vs 買進持有。以獲利為目標時，這一列才是真正的判準。"""
+    pf = (bt or {}).get("bull", {}).get("performance") or {}
+    if not pf.get("n_trades"):
+        return ""
+    bh = pf.get("buy_hold_return")
+    beat = pf.get("beats_buy_hold")
+    verdict = ("<span class=\"bt-conf conf-ok\">勝過買進持有</span>" if beat
+               else "<span class=\"bt-conf conf-low\">不如買進持有</span>") if bh is not None else ""
+    return (f'<div class="bt-row">'
+            f'<span class="bt-side">多方複利</span>'
+            f'<span class="bt-metric">總報酬 <b>{pf["total_return"]:+.0%}</b></span>'
+            f'<span class="bt-metric">年化 <b>{(pf.get("cagr") or 0):+.1%}</b></span>'
+            f'<span class="bt-metric">最大回撤 <b>{pf["max_drawdown"]:.0%}</b></span>'
+            f'<span class="bt-metric">在場 <b>{(pf.get("time_in_market") or 0):.0%}</b></span>'
+            + (f'<span class="bt-metric muted">買進持有 {bh:+.0%}'
+               f'（回撤 {pf.get("buy_hold_max_drawdown", 0):.0%}）</span>' if bh is not None else "")
+            + verdict +
+            f'</div>')
 
 
 # ---------------------------------------------------------------------------
 # 整頁組合
 # ---------------------------------------------------------------------------
-def build_index_html(results: List[Dict], output_path: str = "index.html") -> None:
+def _entry_plan_html(results: List[Dict]) -> str:
+    """
+    今日行動卡：有訊號的標的要「明天怎麼下單」。
+
+    這是整個儀表板最實用的一塊——使用者的操作模式是平常持有現金、有訊號
+    才進場，他收到通知時市場已收盤，需要的是可以直接照做的掛單指示，
+    而不是「剛才的分數是幾分」。
+    """
+    acts = [r for r in results if r.get("alert") and r.get("entry_plan")]
+    if not acts:
+        return ('<div class="empty-state">今日無標的達到警報門檻 — '
+                '維持現金部位，無須動作。</div>')
+
+    cards = ""
+    for r in acts:
+        ep, tp = r["entry_plan"], r.get("trade_plan")
+        conf = (r.get("backtest") or {}).get("bull", {}).get("confidence", "")
+        warn = ('<div class="act-warn">⚠️ 此標的回測未能證實正期望值，'
+                '訊號僅供參考</div>') if conf != "ok" else ""
+        stop_html = ""
+        if tp is not None:
+            src = "OB 下緣" if tp.stop_source == "order_block" else "ATR 距離"
+            risk = abs(tp.entry - tp.stop) / tp.entry if tp.entry else 0
+            stop_html = (f'<div class="act-row"><span>停損</span>'
+                         f'<b>{tp.stop:.2f}</b>'
+                         f'<span class="muted">{src} · 風險 {risk:.1%}</span></div>')
+        cards += f"""
+        <div class="act-card">
+            <div class="act-head">{r['symbol']} <span class="muted">{r['name']}</span>
+                <span class="act-score">{r['bull_score']} 分</span></div>
+            <div class="act-row"><span>限價</span><b>{ep.limit_price:.2f}</b>
+                <span class="muted">收盤 {ep.reference_close:.2f} · 未成交轉市價</span></div>
+            {stop_html}
+            <div class="act-row"><span>出場</span><b>移動停損</b>
+                <span class="muted">2×ATR，不設固定目標</span></div>
+            {warn}
+        </div>"""
+    return f'<div class="act-grid">{cards}</div>'
+
+
+def _concentration_html(note: Optional[List[str]]) -> str:
+    """
+    集中度提醒：同時多個訊號時，它們實際上是幾個獨立風險。
+
+    concentration.describe() 產生的是純文字（給郵件用），裡面的 **粗體**
+    是 Markdown 語法，在 HTML 裡不會渲染，這裡轉成 <b>。
+    """
+    if not note:
+        return ""
+    import html as _html
+    import re as _re
+
+    def fmt(line: str) -> str:
+        safe = _html.escape(line)
+        return _re.sub(r"\*\*(.+?)\*\*", lambda m: "<b>" + m.group(1) + "</b>", safe)
+
+    body = "".join(f"<div class='conc-line'>{fmt(line)}</div>" for line in note)
+    return (f'<div class="section-title">集中度 Concentration</div>'
+            f'<div class="conc-box">{body}</div>')
+
+
+def _methodology_html() -> str:
+    """
+    方法論與局限的誠實揭露。
+
+    放在儀表板上而不只是 README，是因為看板上的數字最容易被當成保證。
+    這裡的每一句都對應 EXPERIMENTS.md 裡的實測結果。
+    """
+    return """
+    <details class="method">
+      <summary>這些數字代表什麼、不代表什麼（務必先讀）</summary>
+      <div class="method-body">
+        <p><b>回測怎麼做的：</b>Walk-forward 樣本外、逐根K棒只用當下已知資訊；
+        扣除來回交易成本（台股 0.47%／ETF 0.27%／美股 0.023%）；
+        不重疊進場；門檻用扣成本期望值的信賴下界挑選，並做 Šidák 多重比較修正。</p>
+        <p><b>「可信」代表什麼：</b>只代表該標的在歷史資料上，這個門檻的
+        扣成本期望值下界大於 0。<b>不代表未來會賺錢。</b></p>
+        <p><b>已知的局限（實測結果）：</b></p>
+        <ul>
+          <li>訊號相對「隨機進場」的超額期望值接近零，且會隨參數變號。</li>
+          <li>跨 22 檔、4 段滾動驗證：超額為正的比例 44%（擲硬幣是 50%）。</li>
+          <li>ML 元件樣本外 AUC 僅 0.518，已預設關閉。</li>
+          <li>獲利高度集中：前 10% 的交易貢獻全部報酬，其餘淨虧損。</li>
+          <li>長期報酬不如買進持有，優勢在較低的回撤。</li>
+        </ul>
+        <p class="muted">完整實驗紀錄與被推翻的假設見 repo 的 EXPERIMENTS.md。</p>
+      </div>
+    </details>"""
+
+
+def build_index_html(results: List[Dict], output_path: str = "index.html",
+                     concentration_note: Optional[List[str]] = None) -> None:
     """
     results: 每個標的的分析結果字典，需包含：
         symbol, name, chart_html, bull_score, bear_score, zone, last_close,
@@ -222,7 +349,9 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
     total = len(results)
     alert_count = sum(1 for r in results if r["alert"])
     bull_count = sum(1 for r in results if r["bull_score"] >= 50)
-    bear_count = sum(1 for r in results if r["bear_score"] >= 50)
+    # 「回測可信」的標的數：比單純的訊號數更能反映該不該當一回事
+    proven = sum(1 for r in results
+                 if (r.get("backtest") or {}).get("bull", {}).get("confidence") == "ok")
 
     # --- KPI 卡片列 ---
     kpi_html = f"""
@@ -239,9 +368,9 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
             <span class="kpi-label">偏多訊號</span>
             <span class="kpi-value">{bull_count}</span>
         </div>
-        <div class="kpi-card kpi-bear">
-            <span class="kpi-label">偏空訊號</span>
-            <span class="kpi-value">{bear_count}</span>
+        <div class="kpi-card kpi-bull">
+            <span class="kpi-label">回測可信</span>
+            <span class="kpi-value">{proven}</span>
         </div>
     </div>"""
 
@@ -372,6 +501,25 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
 
     .container {{ max-width: 1180px; margin: 0 auto; padding: 28px 20px 60px; }}
 
+    .act-grid {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }}
+    .act-card {{ background:var(--card); border:1px solid var(--line); border-left:3px solid var(--amber);
+                 border-radius:10px; padding:14px 16px; }}
+    .act-head {{ font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }}
+    .act-score {{ margin-left:auto; font-size:12px; color:var(--amber); font-weight:700; }}
+    .act-row {{ display:flex; align-items:baseline; gap:8px; font-size:13px; padding:3px 0; }}
+    .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
+    .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
+    .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
+    .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
+                    padding:22px; text-align:center; color:var(--muted); }}
+    .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
+    .conc-line {{ font-size:13px; line-height:1.7; white-space:pre-wrap; }}
+    .method {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+               padding:12px 16px; margin-bottom:18px; }}
+    .method summary {{ cursor:pointer; font-weight:600; font-size:13px; }}
+    .method-body {{ font-size:13px; line-height:1.75; color:var(--muted); margin-top:10px; }}
+    .method-body b {{ color:var(--text); }}
+    .method-body ul {{ margin:6px 0 6px 18px; }}
     .kpi-grid {{
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px;
     }}
@@ -468,7 +616,26 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
     }}
 
     @media (max-width: 860px) {{
-        .kpi-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        .act-grid {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }}
+    .act-card {{ background:var(--card); border:1px solid var(--line); border-left:3px solid var(--amber);
+                 border-radius:10px; padding:14px 16px; }}
+    .act-head {{ font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }}
+    .act-score {{ margin-left:auto; font-size:12px; color:var(--amber); font-weight:700; }}
+    .act-row {{ display:flex; align-items:baseline; gap:8px; font-size:13px; padding:3px 0; }}
+    .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
+    .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
+    .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
+    .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
+                    padding:22px; text-align:center; color:var(--muted); }}
+    .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
+    .conc-line {{ font-size:13px; line-height:1.7; white-space:pre-wrap; }}
+    .method {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+               padding:12px 16px; margin-bottom:18px; }}
+    .method summary {{ cursor:pointer; font-weight:600; font-size:13px; }}
+    .method-body {{ font-size:13px; line-height:1.75; color:var(--muted); margin-top:10px; }}
+    .method-body b {{ color:var(--text); }}
+    .method-body ul {{ margin:6px 0 6px 18px; }}
+    .kpi-grid {{ grid-template-columns: repeat(2, 1fr); }}
         table {{ font-size: 12px; }}
         .chart-card-header {{ flex-direction: column; }}
     }}
@@ -485,6 +652,13 @@ def build_index_html(results: List[Dict], output_path: str = "index.html") -> No
 
 <div class="container">
     {kpi_html}
+
+    {_methodology_html()}
+
+    <div class="section-title">今日行動 Today’s Orders</div>
+    {_entry_plan_html(results)}
+
+    {_concentration_html(concentration_note)}
 
     <div class="section-title">追蹤清單 Watchlist</div>
     <div class="table-wrap">
