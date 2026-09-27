@@ -25,11 +25,65 @@ from smc.analyzer import SMCAnalyzer
 # ---------------------------------------------------------------------------
 # 圖表本體
 # ---------------------------------------------------------------------------
+def _add_trade_markers(fig, df: pd.DataFrame, trades: List[Dict]) -> int:
+    """
+    把回測選中的歷史交易畫到 K 線上：進場三角、出場叉、兩點連線。
+
+    為什麼值得畫：回測的統計數字是匯總結果，看不出這套邏輯在哪些位置
+    進出場。畫回圖上才能用肉眼檢查訊號是否合理——尤其能一眼看出那些
+    撐起全部獲利的大贏家長什麼樣（實測前 10% 的交易貢獻全部報酬）。
+
+    配色沿用本圖表的台股習慣（紅漲綠跌）：獲利=紅、虧損=綠。
+    hover 文字會明講「獲利/虧損」，避免顏色語意被誤讀。
+    """
+    if not trades:
+        return 0
+    start, end = df.index[0], df.index[-1]
+    shown = 0
+    ex, ey, et, xx, xy, xt = [], [], [], [], [], []
+
+    for t in trades:
+        e_ts, x_ts = t["entry_ts"], t["exit_ts"]
+        if e_ts < start or e_ts > end:
+            continue
+        if e_ts not in df.index:
+            continue
+        e_px = float(df["Close"].loc[e_ts])
+        x_ts_eff = x_ts if (x_ts in df.index and x_ts <= end) else end
+        x_px = float(df["Close"].loc[x_ts_eff])
+        win = t["ret"] > 0
+        color = "#f0475d" if win else "#16c784"
+        label = "獲利" if win else "虧損"
+
+        fig.add_shape(type="line", xref="x", yref="y",
+                      x0=e_ts, x1=x_ts_eff, y0=e_px, y1=x_px,
+                      line=dict(color=color, width=1.2, dash="dot"),
+                      opacity=0.75, layer="above", row=1, col=1)
+        ex.append(e_ts); ey.append(e_px)
+        et.append(f"進場 {e_px:.2f}<br>{label} {t['ret']:+.2%}<br>持有 {t['bars']} 根")
+        xx.append(x_ts_eff); xy.append(x_px)
+        xt.append(f"出場 {x_px:.2f}（{t.get('outcome', '?')}）<br>{label} {t['ret']:+.2%}")
+        shown += 1
+
+    if shown:
+        fig.add_trace(go.Scatter(
+            x=ex, y=ey, mode="markers", name="回測進場",
+            marker=dict(symbol="triangle-up", size=9, color="#e2e8f0",
+                        line=dict(color="#0f172a", width=1)),
+            hovertext=et, hoverinfo="text"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=xx, y=xy, mode="markers", name="回測出場",
+            marker=dict(symbol="x", size=8, color="#94a3b8"),
+            hovertext=xt, hoverinfo="text"), row=1, col=1)
+    return shown
+
+
 def build_chart_html(
     symbol: str,
     analyzer: SMCAnalyzer,
     ind_df: Optional[pd.DataFrame] = None,
     lookback_bars: int = 180,
+    trades: Optional[List[Dict]] = None,
 ) -> str:
     """把單一標的的 K 線 + SMC 指標 (+ RSI/MACD副圖，若有提供 ind_df) 畫成一段 HTML。"""
     df = analyzer.df.tail(lookback_bars)
@@ -109,6 +163,9 @@ def build_chart_html(
                           line=dict(color="#5b6472", width=1, dash=dash), row=1, col=1)
             fig.add_annotation(x=df.index[-1], y=y, text=label, showarrow=False,
                                font=dict(size=9, color="#8a94a6"), xanchor="left", row=1, col=1)
+
+    # --- 回測歷史進出場點 ---
+    _add_trade_markers(fig, df, trades or [])
 
     # --- 副圖：RSI + MACD ---
     if has_sub:

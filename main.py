@@ -230,7 +230,9 @@ def run(dry_run: bool = False) -> None:
         bear_threshold = bt["bear"]["threshold"]
         backtest_all_results[symbol] = bt
 
-        chart_html = build_chart_html(symbol, analyzer, ind_df=ind_df)
+        # 把回測選中的歷史交易畫進圖裡，方便用肉眼驗證訊號品質
+        chart_html = build_chart_html(symbol, analyzer, ind_df=ind_df,
+                                      trades=bt.get("trades"))
         closes = analyzer.df["Close"]
         close_series[symbol] = closes
         prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else None

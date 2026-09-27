@@ -471,6 +471,42 @@ def entry_config(config) -> dict:
     }
 
 
+def selected_trades(wf_df: pd.DataFrame, threshold: int, side: str = "bull",
+                    cost: float = 0.0) -> List[dict]:
+    """
+    還原「建議門檻下實際會進場的那些交易」，含進出場時間，供圖表標記。
+
+    回測的統計數字是匯總後的結果，看不出這套邏輯在哪些位置進出場。
+    把交易畫回 K 線圖上，才能用肉眼檢查訊號是否合理——這是統計量表
+    取代不了的一種驗證。
+    """
+    if wf_df.empty:
+        return []
+    prefix = "long" if side == "bull" else "short"
+    col = f"{'bull' if side == 'bull' else 'bear'}_score"
+    if f"{prefix}_ret" not in wf_df.columns:
+        return []
+
+    wf = wf_df.reset_index(drop=True)
+    hold = wf[f"{prefix}_bars"].astype(int)
+    picks = select_non_overlapping(wf[col] >= threshold, hold)
+
+    out = []
+    n = len(wf)
+    for i in picks:
+        bars = int(hold.iloc[i])
+        j = min(i + bars, n - 1)
+        out.append({
+            "entry_ts": wf["ts"].iloc[i],
+            "exit_ts": wf["ts"].iloc[j],
+            "ret": float(wf[f"{prefix}_ret"].iloc[i]) - cost,
+            "bars": bars,
+            "outcome": wf.get(f"{prefix}_outcome", pd.Series(["?"] * n)).iloc[i],
+            "side": side,
+        })
+    return out
+
+
 def trade_config(config) -> dict:
     """從 config 取出 trade_model.plan_trade 需要的參數。"""
     return {
@@ -546,5 +582,7 @@ def run_symbol_backtest(df: pd.DataFrame, analyzer: SMCAnalyzer, ind_df: pd.Data
         "bear": bear_rec,
         "base": stats["base"],
         "buy_hold": bh,
+        # 建議門檻下的實際交易，供圖表標記歷史進出場點
+        "trades": selected_trades(wf_df, bull_rec["threshold"], "bull", cost),
         "threshold_sweep": {"bull": stats["bull"], "bear": stats["bear"]},
     }
