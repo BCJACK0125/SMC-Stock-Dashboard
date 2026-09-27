@@ -36,6 +36,8 @@ from typing import Dict, Optional
 
 from smc.analyzer import SMCAnalyzer
 import indicators as ind
+import config as _cfg
+from positions import describe as describe_position
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +222,8 @@ def score(
 
 
 def send_alert_email(alerts: list, sender: str, app_password: str, recipient: str,
-                     concentration_note: Optional[list] = None) -> None:
+                     concentration_note: Optional[list] = None,
+                     position_status: Optional[list] = None) -> None:
     """
     alerts: [{"symbol":..., "name":..., "side": "bullish"/"bearish",
                "score":..., "reasons":[...], "last_close":...,
@@ -230,10 +233,15 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
     寄件帳號需先開啟兩步驟驗證，並產生「應用程式密碼」(App Password) 供 app_password 使用，
     不要直接用登入密碼。
     """
-    if not alerts:
+    breached = [t for t in (position_status or []) if t.get("breached")]
+    # 持倉跌破停損是最需要立刻知道的事，就算當天沒有任何新訊號也要寄。
+    if not alerts and not breached:
         return
 
-    subject = f"📈 SMC 選股警報：{len(alerts)} 檔標的觸發訊號"
+    if breached:
+        subject = f"🚨 SMC 持倉警報：{len(breached)} 檔跌破移動停損"
+    else:
+        subject = f"📈 SMC 選股警報：{len(alerts)} 檔標的觸發訊號"
     lines = []
     for a in alerts:
         side_label = "多方 🟢" if a["side"] == "bullish" else "空方 🔴"
@@ -285,7 +293,17 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
             order_lines.append(
                 f"  ▸ 停損：{tp.stop:.2f}（{src}），"
                 f"風險 {abs(tp.entry - tp.stop) / tp.entry:.1%}")
-            order_lines.append("  ▸ 出場：移動停損 2×ATR，不設固定目標（讓獲利奔跑）")
+            # 出場給的是「今天這筆的實際停損價」，不是規則——每天排程都算得出來
+            mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
+            atr_now = a.get("atr")
+            if atr_now:
+                first = max(tp.stop, ep.limit_price - mult * atr_now)
+                order_lines.append(
+                    f"  ▸ 出場：移動停損起始 {first:.2f}（{mult:g}×ATR），"
+                    f"之後每日隨最高價上調，不設固定目標")
+            else:
+                order_lines.append(
+                    f"  ▸ 出場：移動停損 {mult:g}×ATR，不設固定目標（讓獲利奔跑）")
         sz = a.get("sizing")
         if sz:
             if sz.get("fraction", 0) > 0:
@@ -303,6 +321,11 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
             + "\n".join(f"  - {r}" for r in a["reasons"])
         )
     body = "\n\n".join(lines)
+    # 持倉的今日停損價。移動停損每天都在動，只給規則等於要使用者自己算。
+    if position_status:
+        head = "🚨 持倉已跌破停損，應出場" if breached else "📌 持倉今日停損"
+        body += ("\n\n" + "─" * 46 + f"\n{head}\n"
+                 + "\n".join("  " + describe_position(t) for t in position_status))
     # 集中度提醒：同一天多個訊號若高度相關，等於在同一個賭注上押多倍
     if concentration_note:
         body += "\n\n" + "─" * 46 + "\n📐 集中度提醒\n" + "\n".join(concentration_note)

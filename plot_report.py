@@ -20,6 +20,7 @@ from plotly.subplots import make_subplots
 from plotly.offline import plot as plotly_plot
 
 from smc.analyzer import SMCAnalyzer
+import config as _cfg
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +335,18 @@ def _entry_plan_html(results: List[Dict]) -> str:
                 size_html = ('<div class="act-row"><span>部位</span>'
                              '<b>不建議</b>'
                              f'<span class="muted">{sz.get("reason", "")}</span></div>')
+        # 出場：給出進場當天的實際移動停損價，而不是只給規則
+        mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
+        atr_now = r.get("atr")
+        if tp is not None and atr_now:
+            first = max(tp.stop, ep.limit_price - mult * atr_now)
+            exit_html = (f'<div class="act-row"><span>出場</span>'
+                         f'<b>{first:.2f}</b>'
+                         f'<span class="muted">移動停損 {mult:g}×ATR，'
+                         f'之後每日隨最高價上調</span></div>')
+        else:
+            exit_html = (f'<div class="act-row"><span>出場</span><b>移動停損</b>'
+                         f'<span class="muted">{mult:g}×ATR，不設固定目標</span></div>')
         stop_html = ""
         if tp is not None:
             src = "OB 下緣" if tp.stop_source == "order_block" else "ATR 距離"
@@ -348,12 +361,58 @@ def _entry_plan_html(results: List[Dict]) -> str:
             <div class="act-row"><span>限價</span><b>{ep.limit_price:.2f}</b>
                 <span class="muted">收盤 {ep.reference_close:.2f} · 未成交轉市價</span></div>
             {stop_html}
-            <div class="act-row"><span>出場</span><b>移動停損</b>
-                <span class="muted">2×ATR，不設固定目標</span></div>
+            {exit_html}
             {size_html}
             {warn}
         </div>"""
     return f'<div class="act-grid">{cards}</div>'
+
+
+def _positions_html(status: Optional[List[Dict]]) -> str:
+    """
+    持倉追蹤：移動停損每天都在動，所以每天都要給出當天的數字。
+
+    只有 positions.json 裡有資料才會出現這個區塊——沒在持倉的人不需要看到
+    一個空表格。
+    """
+    if not status:
+        return ""
+    mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
+    rows = ""
+    for t in status:
+        cls = "pos-breach" if t["breached"] else ("pos-locked" if t["locked_in"] else "")
+        note = ("⚠️ 已跌破，應出場" if t["breached"]
+                else ("🔒 停損已高於成本" if t["locked_in"] else ""))
+        up = t["unrealized_pct"]
+        col = "#f0475d" if up >= 0 else "#16c784"
+        rows += f"""
+        <tr class="{cls}">
+            <td><span class="sym-code">{t['symbol']}</span>
+                <span class="sym-name">{t.get('name', '')}</span></td>
+            <td class="num">{t['entry_price']:.2f}</td>
+            <td class="num">{t['last']:.2f}</td>
+            <td class="num" style="color:{col};">{up:+.1%}</td>
+            <td class="num"><b>{t['stop']:.2f}</b></td>
+            <td class="num">{t['stop_distance_pct']:.1%}</td>
+            <td class="num">{t['bars_held']}</td>
+            <td>{note}</td>
+        </tr>"""
+    return f"""
+    <div class="section-title">持倉追蹤 Open Positions</div>
+    <div class="table-wrap">
+        <table>
+            <thead><tr>
+                <th>標的</th><th class="num">進場</th><th class="num">現價</th>
+                <th class="num">損益</th><th class="num">今日停損</th>
+                <th class="num">距停損</th><th class="num">持有</th><th></th>
+            </tr></thead>
+            <tbody>{rows}</tbody>
+        </table>
+    </div>
+    <p class="muted" style="margin-top:8px;">
+        停損 = max(初始停損, 進場後最高價 − {mult:g}×ATR)，只升不降。
+        資料來自 repo 根目錄的 positions.json，實際成交後自行填入。
+    </p>"""
 
 
 def _concentration_html(note: Optional[List[str]]) -> str:
@@ -399,7 +458,11 @@ def _methodology_html() -> str:
           <li>跨 22 檔、4 段滾動驗證：超額為正的比例 44%（擲硬幣是 50%）。</li>
           <li>ML 元件樣本外 AUC 僅 0.518，已預設關閉。</li>
           <li>獲利高度集中：前 10% 的交易貢獻全部報酬，其餘淨虧損。</li>
-          <li>長期報酬不如買進持有，優勢在較低的回撤。</li>
+          <li>逐檔比較，長期報酬與 Calmar 都不如買進持有；組合層（多檔同時
+              持倉）才靠分散取得較低的回撤。</li>
+          <li>「折價區」這個 15 分的評分元件，在 1,062 筆訊號裡只觸發 5 次
+              ——實際進場中位落在近 60 日區間的第 88 百分位（買在高點）。
+              但實測買高並沒有比較差，所以未更動進場邏輯。</li>
         </ul>
         <p class="muted">完整實驗紀錄與被推翻的假設見 repo 的 EXPERIMENTS.md。</p>
       </div>
@@ -407,7 +470,8 @@ def _methodology_html() -> str:
 
 
 def build_index_html(results: List[Dict], output_path: str = "index.html",
-                     concentration_note: Optional[List[str]] = None) -> None:
+                     concentration_note: Optional[List[str]] = None,
+                     position_status: Optional[List[Dict]] = None) -> None:
     """
     results: 每個標的的分析結果字典，需包含：
         symbol, name, chart_html, bull_score, bear_score, zone, last_close,
@@ -580,6 +644,8 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
     .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
     .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
     .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
+    tr.pos-breach {{ background:rgba(240,71,93,0.10); }}
+    tr.pos-locked {{ background:rgba(22,199,132,0.08); }}
     .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
                     padding:22px; text-align:center; color:var(--muted); }}
     .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
@@ -695,6 +761,8 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
     .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
     .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
     .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
+    tr.pos-breach {{ background:rgba(240,71,93,0.10); }}
+    tr.pos-locked {{ background:rgba(22,199,132,0.08); }}
     .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
                     padding:22px; text-align:center; color:var(--muted); }}
     .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
@@ -729,6 +797,8 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
     {_entry_plan_html(results)}
 
     {_concentration_html(concentration_note)}
+
+    {_positions_html(position_status)}
 
     <div class="section-title">追蹤清單 Watchlist</div>
     <div class="table-wrap">

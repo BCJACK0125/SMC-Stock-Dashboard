@@ -44,6 +44,7 @@ def pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BACKTEST_RESULTS_JSON", str(tmp_path / "bt.json"))
     monkeypatch.setattr(config, "BACKTEST_CACHE_JSON", str(tmp_path / "cache.json"))
     monkeypatch.setattr(config, "ALERT_STATE_JSON", str(tmp_path / "alert.json"))
+    monkeypatch.setattr(config, "POSITIONS_JSON", str(tmp_path / "positions.json"))
     # 縮小規模：冒煙測試的價值在「走過整條執行路徑」，不在資料量
     monkeypatch.setattr(config, "BACKTEST_WARMUP_BARS", 200)
     monkeypatch.setattr(config, "TRADE_TRAILING_MAX_HOLDING_BARS", 40)
@@ -106,3 +107,49 @@ def test_dashboard_contains_the_action_section(pipeline):
     html = (tmp / "index.html").read_text(encoding="utf-8")
     assert "今日行動" in html
     assert "這些數字代表什麼" in html      # 方法論揭露
+
+
+def test_open_positions_appear_on_the_dashboard(pipeline, tmp_path, monkeypatch):
+    """持倉追蹤要真的走過 run()：算停損、進 HTML。"""
+    import json
+    main, config, tmp = pipeline
+    pos = tmp_path / "positions.json"
+    pos.write_text(json.dumps(
+        [{"symbol": "AAA", "entry_date": "2022-01-03", "entry_price": 100.0}]),
+        encoding="utf-8")
+    monkeypatch.setattr(config, "POSITIONS_JSON", str(pos))
+    main.run(dry_run=True)
+    html = (tmp / "index.html").read_text(encoding="utf-8")
+    assert "持倉追蹤" in html
+    assert "今日停損" in html
+
+
+def test_no_positions_file_means_no_positions_section(pipeline, monkeypatch):
+    main, config, tmp = pipeline
+    monkeypatch.setattr(config, "POSITIONS_JSON", str(tmp / "nope.json"))
+    main.run(dry_run=True)
+    html = (tmp / "index.html").read_text(encoding="utf-8")
+    assert "持倉追蹤" not in html
+
+
+def test_a_broken_positions_file_does_not_stop_the_run(pipeline, tmp_path, monkeypatch):
+    main, config, tmp = pipeline
+    bad = tmp_path / "positions.json"
+    bad.write_text("{ 這不是 JSON", encoding="utf-8")
+    monkeypatch.setattr(config, "POSITIONS_JSON", str(bad))
+    main.run(dry_run=True)
+    assert (tmp / "index.html").exists()
+
+
+def test_a_position_for_an_untracked_symbol_is_reported(pipeline, tmp_path,
+                                                        monkeypatch, capsys):
+    """代號打錯就等於停損從此不更新，必須出聲。"""
+    import json
+    main, config, tmp = pipeline
+    pos = tmp_path / "positions.json"
+    pos.write_text(json.dumps(
+        [{"symbol": "ZZZZ", "entry_date": "2022-01-03", "entry_price": 10.0}]),
+        encoding="utf-8")
+    monkeypatch.setattr(config, "POSITIONS_JSON", str(pos))
+    main.run(dry_run=True)
+    assert "ZZZZ" in capsys.readouterr().err

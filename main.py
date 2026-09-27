@@ -30,6 +30,7 @@ import yfinance as yf
 import backtest_cache
 import concentration
 import position_sizing
+import positions as positions_mod
 import trade_model
 from smc.analyzer import SMCAnalyzer
 from plot_report import build_chart_html, build_index_html
@@ -175,6 +176,10 @@ def run(dry_run: bool = False) -> None:
     alerts = []
     backtest_all_results = {}
     close_series = {}          # 供集中度分析用
+    # 手動維護的持倉：把「移動停損 N×ATR」換算成今天的實際停損價
+    open_positions = positions_mod.load(
+        getattr(config, "POSITIONS_JSON", "positions.json"))
+    position_status = []
     bt_cache = backtest_cache.load(getattr(config, "BACKTEST_CACHE_JSON", "backtest_cache.json"))
     n_cached = n_computed = 0
     generated_at = datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M (台北時間)")
@@ -190,6 +195,19 @@ def run(dry_run: bool = False) -> None:
 
         # 技術指標（RSI/MACD/EMA/ADX/ATR/OBV）
         ind_df = ind.compute_indicator_set(analyzer.df)
+
+        # 這檔若有持倉，算出今天的移動停損價
+        for pos in (p for p in open_positions if p.get("symbol") == symbol):
+            st = positions_mod.track(
+                pos, analyzer.df, ind_df["atr"],
+                getattr(config, "TRADE_TRAIL_ATR_MULT", 2.0))
+            if st is None:
+                print(f"[WARN] positions.json 裡 {symbol} 這筆資料無法對應行情，已略過",
+                      file=sys.stderr)
+            else:
+                st["name"] = name
+                position_status.append(st)
+                print(f"[INFO] 持倉 {positions_mod.describe(st)}")
 
         # 輕量 ML 模型（資料量不足或類別失衡時，內部會回傳 None，score() 會自動略過這一項）
         ml_result = None
@@ -297,6 +315,7 @@ def run(dry_run: bool = False) -> None:
             "zone": analyzer.current_zone["zone"] if analyzer.current_zone else "-",
             "last_close": float(closes.iloc[-1]),
             "prev_close": prev_close,
+            "atr": atr_now,
             "last_event": last_event_str,
             "ml_prob_up": ml_result["prob_up"] if ml_result else None,
             "alert": s["bull_score"] >= bull_threshold or s["bear_score"] >= bear_threshold,
@@ -329,6 +348,7 @@ def run(dry_run: bool = False) -> None:
                 "backtest_n": bt["bull"]["n"],
                 "backtest_confidence": bt["bull"]["confidence"],
                 "performance": bt["bull"].get("performance"),
+                "atr": atr_now,
                 "entry_plan": entry_plan,
                 "trade_plan": trade_plan,
                 "sizing": sizing,
@@ -353,6 +373,15 @@ def run(dry_run: bool = False) -> None:
         print("[ERROR] 沒有任何標的分析成功，中止。", file=sys.stderr)
         sys.exit(1)
 
+    # positions.json 裡的代號若不在 WATCHLIST，那筆持倉不會被追蹤到，
+    # 而且完全沒有徵兆——打錯一個字就等於停損從此不更新。
+    tracked = {t["symbol"] for t in position_status}
+    for p in open_positions:
+        if p["symbol"] not in tracked:
+            print(f"[WARN] positions.json 的 {p['symbol']} 沒有對應到任何"
+                  f"已分析的標的，這筆持倉不會被追蹤（代號打錯？不在 WATCHLIST？）",
+                  file=sys.stderr)
+
     # 集中度：同時出現的訊號是否其實是同一個風險。
     # 使用者不做資金配置，但同一天 5 個高度相關的訊號，等於在同一個賭注
     # 上押 5 倍——看起來分散，實際不是。
@@ -374,7 +403,8 @@ def run(dry_run: bool = False) -> None:
         print(f"[INFO] 回測快取：沿用 {n_cached} 檔、重算 {n_computed} 檔")
 
     build_index_html(results, output_path=config.OUTPUT_HTML,
-                     concentration_note=concentration_note)
+                     concentration_note=concentration_note,
+                     position_status=position_status)
     print(f"[INFO] 已產生 {config.OUTPUT_HTML}")
 
     try:
@@ -399,18 +429,27 @@ def run(dry_run: bool = False) -> None:
     if suppressed:
         print(f"[INFO] {suppressed} 筆訊號在冷卻期內（先前已通知過），本次不重複寄信。")
 
-    if fresh_alerts and not dry_run:
+    # 持倉跌破停損也要寄信——那是最該立刻行動的事件，跟有沒有新訊號無關
+    breached = [t for t in position_status if t["breached"]]
+    if breached:
+        print(f"[INFO] {len(breached)} 檔持倉已跌破移動停損。")
+    need_email = bool(fresh_alerts or breached)
+
+    if need_email and not dry_run:
         creds = get_email_credentials_from_env()
         if not all(creds.values()):
             print("[WARN] 缺少 Email 環境變數（GMAIL_SENDER / GMAIL_APP_PASSWORD / ALERT_RECIPIENT），略過寄信。",
                   file=sys.stderr)
         else:
             send_alert_email(fresh_alerts, **creds,
-                             concentration_note=concentration_note)
+                             concentration_note=concentration_note,
+                             position_status=position_status)
             save_alert_state(state)      # 寄成功才記錄，失敗時下次仍會重試
-            print(f"[INFO] 已寄出警報信，共 {len(fresh_alerts)} 筆訊號。")
-    elif fresh_alerts and dry_run:
-        print(f"[DRY-RUN] 有 {len(fresh_alerts)} 筆新訊號會觸發寄信，但因 --dry-run 略過。")
+            print(f"[INFO] 已寄出警報信，共 {len(fresh_alerts)} 筆訊號、"
+                  f"{len(breached)} 筆持倉停損。")
+    elif need_email and dry_run:
+        print(f"[DRY-RUN] 有 {len(fresh_alerts)} 筆新訊號、{len(breached)} 筆持倉停損"
+              f"會觸發寄信，但因 --dry-run 略過。")
     elif alerts:
         print("[INFO] 有訊號達到門檻，但都在冷卻期內，不重複寄信。")
     else:
