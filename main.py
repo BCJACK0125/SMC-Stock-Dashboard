@@ -252,33 +252,6 @@ def run(dry_run: bool = False) -> None:
         close_series[symbol] = closes
         prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else None
 
-        results.append({
-            "symbol": symbol,
-            "name": name,
-            "chart_html": chart_html,
-            "bull_score": s["bull_score"],
-            "bear_score": s["bear_score"],
-            "zone": analyzer.current_zone["zone"] if analyzer.current_zone else "-",
-            "last_close": float(closes.iloc[-1]),
-            "prev_close": prev_close,
-            "last_event": last_event_str,
-            "ml_prob_up": ml_result["prob_up"] if ml_result else None,
-            "alert": s["bull_score"] >= bull_threshold or s["bear_score"] >= bear_threshold,
-            "generated_at": generated_at,
-            "bull_threshold": bull_threshold,
-            "bear_threshold": bear_threshold,
-            "backtest": bt,
-            "performance": bt["bull"].get("performance"),
-            "entry_plan": entry_plan,
-            "trade_plan": trade_plan,
-            "sizing": sizing,
-        })
-
-        only_proven = getattr(config, "ALERT_ONLY_WHEN_EDGE_PROVEN", False)
-
-        def worth_alerting(side_key: str) -> bool:
-            return (not only_proven) or bt[side_key]["confidence"] == "ok"
-
         # 進場計畫：訊號是收盤後才看到的，所以給的是「隔天怎麼下單」
         atr_now = float(ind_df["atr"].iloc[-1]) if "atr" in ind_df.columns else 0.0
         entry_plan = trade_model.plan_entry(
@@ -314,6 +287,33 @@ def run(dry_run: bool = False) -> None:
             except Exception as e:
                 print(f"[WARN] {symbol} 部位建議計算失敗（不影響其他輸出）：{e}",
                       file=sys.stderr)
+
+        results.append({
+            "symbol": symbol,
+            "name": name,
+            "chart_html": chart_html,
+            "bull_score": s["bull_score"],
+            "bear_score": s["bear_score"],
+            "zone": analyzer.current_zone["zone"] if analyzer.current_zone else "-",
+            "last_close": float(closes.iloc[-1]),
+            "prev_close": prev_close,
+            "last_event": last_event_str,
+            "ml_prob_up": ml_result["prob_up"] if ml_result else None,
+            "alert": s["bull_score"] >= bull_threshold or s["bear_score"] >= bear_threshold,
+            "generated_at": generated_at,
+            "bull_threshold": bull_threshold,
+            "bear_threshold": bear_threshold,
+            "backtest": bt,
+            "performance": bt["bull"].get("performance"),
+            "entry_plan": entry_plan,
+            "trade_plan": trade_plan,
+            "sizing": sizing,
+        })
+
+        only_proven = getattr(config, "ALERT_ONLY_WHEN_EDGE_PROVEN", False)
+
+        def worth_alerting(side_key: str) -> bool:
+            return (not only_proven) or bt[side_key]["confidence"] == "ok"
 
         if s["bull_score"] >= bull_threshold and worth_alerting("bull"):
             alerts.append({
