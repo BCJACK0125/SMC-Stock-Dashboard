@@ -124,12 +124,15 @@ def test_open_positions_appear_on_the_dashboard(pipeline, tmp_path, monkeypatch)
     assert "今日停損" in html
 
 
-def test_no_positions_file_means_no_positions_section(pipeline, monkeypatch):
+def test_no_positions_shows_how_to_add_one(pipeline, monkeypatch):
+    """沒有持倉時要說明怎麼填，否則這個功能對沒用過的人是隱形的。"""
     main, config, tmp = pipeline
     monkeypatch.setattr(config, "POSITIONS_JSON", str(tmp / "nope.json"))
     main.run(dry_run=True)
     html = (tmp / "index.html").read_text(encoding="utf-8")
-    assert "持倉追蹤" not in html
+    assert "positions.json" in html
+    assert "entry_price" in html          # 可直接複製的範例
+    assert "目前沒有持倉紀錄" in html
 
 
 def test_a_broken_positions_file_does_not_stop_the_run(pipeline, tmp_path, monkeypatch):

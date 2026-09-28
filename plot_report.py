@@ -13,6 +13,7 @@ plot_report.py
 """
 
 from __future__ import annotations
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 import pandas as pd
 import plotly.graph_objects as go
@@ -21,6 +22,7 @@ from plotly.offline import plot as plotly_plot
 
 from smc.analyzer import SMCAnalyzer
 import config as _cfg
+import exit_policy
 
 
 # ---------------------------------------------------------------------------
@@ -335,25 +337,22 @@ def _entry_plan_html(results: List[Dict]) -> str:
                 size_html = ('<div class="act-row"><span>部位</span>'
                              '<b>不建議</b>'
                              f'<span class="muted">{sz.get("reason", "")}</span></div>')
-        # 出場：給出進場當天的實際移動停損價，而不是只給規則
+        # 停損只給一個數字。先前分成「停損」與「出場」兩列，但那是同一個
+        # 東西的兩種算法取較高者——在 5×ATR 之下兩者多半相等，看到兩個數字
+        # 只會讓人不知道該在券商掛哪一個。
         mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
         atr_now = r.get("atr")
-        if tp is not None and atr_now:
-            first = max(tp.stop, ep.limit_price - mult * atr_now)
-            exit_html = (f'<div class="act-row"><span>出場</span>'
-                         f'<b>{first:.2f}</b>'
-                         f'<span class="muted">移動停損 {mult:g}×ATR，'
-                         f'之後每日隨最高價上調</span></div>')
-        else:
-            exit_html = (f'<div class="act-row"><span>出場</span><b>移動停損</b>'
-                         f'<span class="muted">{mult:g}×ATR，不設固定目標</span></div>')
         stop_html = ""
         if tp is not None:
-            src = "OB 下緣" if tp.stop_source == "order_block" else "ATR 距離"
-            risk = abs(tp.entry - tp.stop) / tp.entry if tp.entry else 0
+            first = max(tp.stop, ep.limit_price - mult * atr_now) if atr_now else tp.stop
+            src = ("OB 下緣" if abs(first - tp.stop) < 1e-9
+                   else f"{mult:g}×ATR")
+            risk = abs(ep.limit_price - first) / ep.limit_price if ep.limit_price else 0
             stop_html = (f'<div class="act-row"><span>停損</span>'
-                         f'<b>{tp.stop:.2f}</b>'
-                         f'<span class="muted">{src} · 風險 {risk:.1%}</span></div>')
+                         f'<b>{first:.2f}</b>'
+                         f'<span class="muted">{src} · 風險 {risk:.1%}</span></div>'
+                         f'<div class="act-note">不設固定目標；停損每日隨進場後'
+                         f'最高價上調（{mult:g}×ATR 移動停損，只升不降）</div>')
         cards += f"""
         <div class="act-card">
             <div class="act-head">{r['symbol']} <span class="muted">{r['name']}</span>
@@ -361,11 +360,79 @@ def _entry_plan_html(results: List[Dict]) -> str:
             <div class="act-row"><span>限價</span><b>{ep.limit_price:.2f}</b>
                 <span class="muted">收盤 {ep.reference_close:.2f} · 未成交轉市價</span></div>
             {stop_html}
-            {exit_html}
             {size_html}
             {warn}
         </div>"""
     return f'<div class="act-grid">{cards}</div>'
+
+
+def _action_banner_html(results: List[Dict],
+                        position_status: Optional[List[Dict]]) -> str:
+    """
+    頁面最上方的一句話：今天到底要不要動作。
+
+    這個儀表板的使用情境是「平常抱現金、每天瞄一眼」，所以第一眼要回答的
+    不是分數幾分，而是「有沒有事」。出場排在進場前面——手上的部位跌破停損
+    比錯過一個新訊號急迫得多。
+    """
+    breached = [t for t in (position_status or []) if t["breached"]]
+    acts = [r for r in results if r.get("alert") and r.get("entry_plan")]
+
+    if breached:
+        names = "、".join(f"{t['symbol']} @ {t['stop']:.2f}" for t in breached)
+        return (f'<div class="banner banner-exit"><span class="banner-icon">🚨</span>'
+                f'<div><b>{len(breached)} 檔持倉跌破移動停損，應出場</b>'
+                f'<span class="banner-sub">{names}</span></div></div>')
+    if acts:
+        names = "、".join(r["symbol"] for r in acts)
+        return (f'<div class="banner banner-entry"><span class="banner-icon">🔔</span>'
+                f'<div><b>{len(acts)} 檔達到進場門檻</b>'
+                f'<span class="banner-sub">{names}　·　收盤後掛單，見下方「今日行動」</span>'
+                f'</div></div>')
+    return ('<div class="banner banner-calm"><span class="banner-icon">☕</span>'
+            '<div><b>今天沒有事要做</b>'
+            '<span class="banner-sub">無訊號、持倉也都在停損之上——維持現金部位</span>'
+            '</div></div>')
+
+
+def _risk_policy_html() -> str:
+    """
+    風險設定：使用者設的回撤預算、換算出來的出場寬度，以及**它守不住**。
+
+    這一塊的重點不是炫耀可調整，而是揭露這個旋鈕實際上能做到什麼。
+    把預算講成保證，比不提供這個旋鈕還糟。
+    """
+    d = exit_policy.describe(getattr(_cfg, "DRAWDOWN_BUDGET", 0.40))
+    floor = ('<p class="risk-warn">已經是最保守的一檔，再往下調換不到更低的'
+             '回撤，只會換到更低的報酬。</p>' if d["floor_reached"] else "")
+    return f"""
+    <details class="risk-box">
+      <summary>風險設定：可接受回撤 {d['budget']:.0%} → 移動停損
+        {d['trail_atr_mult']:g}×ATR</summary>
+      <div class="risk-body">
+        <div class="risk-grid">
+          <div><span class="risk-label">出場寬度</span>
+               <span class="risk-val">{d['trail_atr_mult']:g}×ATR</span></div>
+          <div><span class="risk-label">校準期年化（中位）</span>
+               <span class="risk-val">{d['expected_cagr']:+.1%}</span></div>
+          <div><span class="risk-label">校準期回撤（中位）</span>
+               <span class="risk-val">{d['expected_drawdown']:.1%}</span></div>
+          <div><span class="risk-label">樣本外超出預算</span>
+               <span class="risk-val warn">{d['oos_breach']} 檔</span></div>
+        </div>
+        <p class="risk-warn"><b>這個預算是傾向，不是保證。</b>
+          上面的回撤是 22 檔的<b>中位數</b>——樣本外仍有
+          <b>{d['oos_breach']}</b> 檔個別超過了 {d['budget']:.0%}。
+          把它當成「大概會落在哪一區」，不要當成上限。</p>
+        {floor}
+        <p><b>能調的其實是報酬，不是回撤。</b>不論預算設多少，樣本外的實際
+          回撤都落在 −31%~−34%；收緊停損只會少賺，不會少跌
+          （1×ATR 年化 3.5% vs 5×ATR 年化 15.3%，兩者回撤相同）。</p>
+        <p class="muted">寬度是所有標的共用的。逐檔挑最佳寬度實測無效——
+          用前五年挑、後五年驗證，21 檔只有 1 檔挑對（5%），比隨機猜
+          8 選 1（12.5%）還差。改 <code>config.DRAWDOWN_BUDGET</code> 可調整。</p>
+      </div>
+    </details>"""
 
 
 def _positions_html(status: Optional[List[Dict]]) -> str:
@@ -375,9 +442,17 @@ def _positions_html(status: Optional[List[Dict]]) -> str:
     只有 positions.json 裡有資料才會出現這個區塊——沒在持倉的人不需要看到
     一個空表格。
     """
-    if not status:
-        return ""
     mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
+    if not status:
+        return f"""
+    <div class="section-title">持倉追蹤 Open Positions</div>
+    <div class="empty-state">
+        <p style="margin:0 0 8px;">目前沒有持倉紀錄。</p>
+        <p class="muted" style="margin:0 0 10px;">實際成交後，把這段填進 repo 根目錄的
+            <code>positions.json</code>，之後每天就會算出當天的移動停損價
+            （{mult:g}×ATR，只升不降），跌破時也會單獨寄信通知。</p>
+        <pre class="code-hint">[{{"symbol": "NVDA", "entry_date": "2026-09-28", "entry_price": 178.50}}]</pre>
+    </div>"""
     rows = ""
     for t in status:
         cls = "pos-breach" if t["breached"] else ("pos-locked" if t["locked_in"] else "")
@@ -394,7 +469,8 @@ def _positions_html(status: Optional[List[Dict]]) -> str:
             <td class="num" style="color:{col};">{up:+.1%}</td>
             <td class="num"><b>{t['stop']:.2f}</b></td>
             <td class="num">{t['stop_distance_pct']:.1%}</td>
-            <td class="num">{t['bars_held']}</td>
+            <td class="num col-sec">{t['entry_date']}</td>
+            <td class="num col-sec">{t['bars_held']} 根</td>
             <td>{note}</td>
         </tr>"""
     return f"""
@@ -402,13 +478,15 @@ def _positions_html(status: Optional[List[Dict]]) -> str:
     <div class="table-wrap">
         <table>
             <thead><tr>
-                <th>標的</th><th class="num">進場</th><th class="num">現價</th>
+                <th>標的</th><th class="num">進場價</th><th class="num">現價</th>
                 <th class="num">損益</th><th class="num">今日停損</th>
-                <th class="num">距停損</th><th class="num">持有</th><th></th>
+                <th class="num">距停損</th><th class="num col-sec">進場日</th>
+                <th class="num col-sec">持有</th><th></th>
             </tr></thead>
             <tbody>{rows}</tbody>
         </table>
     </div>
+    <p class="scroll-hint">← 左右滑動可看更多欄位 →</p>
     <p class="muted" style="margin-top:8px;">
         停損 = max(初始停損, 進場後最高價 − {mult:g}×ATR)，只升不降。
         資料來自 repo 根目錄的 positions.json，實際成交後自行填入。
@@ -458,8 +536,12 @@ def _methodology_html() -> str:
           <li>跨 22 檔、4 段滾動驗證：超額為正的比例 44%（擲硬幣是 50%）。</li>
           <li>ML 元件樣本外 AUC 僅 0.518，已預設關閉。</li>
           <li>獲利高度集中：前 10% 的交易貢獻全部報酬，其餘淨虧損。</li>
-          <li>逐檔比較，長期報酬與 Calmar 都不如買進持有；組合層（多檔同時
-              持倉）才靠分散取得較低的回撤。</li>
+          <li>同期年化：本策略 15.3%、SPY 15.1%、QQQ 20.8%、SMH 半導體 ETF
+              34.6%。<b>買一檔指數 ETF 抱著就贏過這套系統</b>，而那不需要
+              任何選股或擇時。</li>
+          <li>策略真正的優勢有兩個：在場時間只有 39%（每單位曝險的報酬
+              39.6% 高於買進持有的 32.1%），以及 2022 熊市中位 −18.8%
+              對買進持有的 −38.6%。</li>
           <li>「折價區」這個 15 分的評分元件，在 1,062 筆訊號裡只觸發 5 次
               ——實際進場中位落在近 60 日區間的第 88 百分位（買在高點）。
               但實測買高並沒有比較差，所以未更動進場邏輯。</li>
@@ -479,33 +561,31 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
         選填：prev_close（用來算漲跌%）、backtest（run_symbol_backtest 的回傳值）
     """
     generated_at = results[0]["generated_at"] if results else ""
+    generated_iso = datetime.now(timezone.utc).isoformat()
 
-    total = len(results)
-    alert_count = sum(1 for r in results if r["alert"])
-    bull_count = sum(1 for r in results if r["bull_score"] >= 50)
-    # 「回測可信」的標的數：比單純的訊號數更能反映該不該當一回事
-    proven = sum(1 for r in results
-                 if (r.get("backtest") or {}).get("bull", {}).get("confidence") == "ok")
+    acts = [r for r in results if r.get("alert") and r.get("entry_plan")]
+    pos = position_status or []
+    breached = [t for t in pos if t["breached"]]
+    unreal = sum(t["unrealized_pct"] for t in pos) / len(pos) if pos else None
 
-    # --- KPI 卡片列 ---
+    # KPI 回答的是「我今天要做什麼」，不是「系統跑了幾檔」。
+    # 追蹤標的數之類的系統狀態放到頁尾就好。
+    def kpi(label, value, cls="", sub=""):
+        sub_html = f'<span class="kpi-sub">{sub}</span>' if sub else ""
+        return (f'<div class="kpi-card {cls}"><span class="kpi-label">{label}</span>'
+                f'<span class="kpi-value">{value}</span>{sub_html}</div>')
+
     kpi_html = f"""
     <div class="kpi-grid">
-        <div class="kpi-card">
-            <span class="kpi-label">追蹤標的</span>
-            <span class="kpi-value">{total}</span>
-        </div>
-        <div class="kpi-card kpi-alert">
-            <span class="kpi-label">🔔 觸發警報</span>
-            <span class="kpi-value">{alert_count}</span>
-        </div>
-        <div class="kpi-card kpi-bull">
-            <span class="kpi-label">偏多訊號</span>
-            <span class="kpi-value">{bull_count}</span>
-        </div>
-        <div class="kpi-card kpi-bull">
-            <span class="kpi-label">回測可信</span>
-            <span class="kpi-value">{proven}</span>
-        </div>
+        {kpi("今日要出場", len(breached), "kpi-bear" if breached else "",
+             "跌破移動停損" if breached else "持倉都在停損之上")}
+        {kpi("今日可進場", len(acts), "kpi-alert" if acts else "",
+             "已達警報門檻" if acts else "維持現金")}
+        {kpi("持倉中", len(pos), "",
+             f"平均 {unreal:+.1%}" if unreal is not None else "未填 positions.json")}
+        {kpi("回測可信的標的", sum(1 for r in results
+             if (r.get("backtest") or {}).get("bull", {}).get("confidence") == "ok"),
+             "kpi-bull", f"共追蹤 {len(results)} 檔")}
     </div>"""
 
     # --- 清單表格 ---
@@ -514,9 +594,13 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
         close_prev = r.get("prev_close")
         if close_prev:
             chg = (r["last_close"] - close_prev) / close_prev * 100
-            chg_color = "#f0475d" if chg >= 0 else "#16c784"
-            chg_sign = "+" if chg >= 0 else ""
-            chg_html = f'<span style="color:{chg_color};">{chg_sign}{chg:.2f}%</span>'
+            # 台股慣例紅漲綠跌，但同一頁的多方分數又是綠色——顏色會互相矛盾。
+            # 加上箭頭，讓漲跌不依賴顏色就讀得出來。
+            up = chg >= 0
+            chg_color = "#f0475d" if up else "#16c784"
+            arrow = "▲" if up else "▼"
+            chg_html = (f'<span class="chg" style="color:{chg_color};">'
+                        f'{arrow} {abs(chg):.2f}%</span>')
         else:
             chg_html = '<span class="muted">—</span>'
 
@@ -534,8 +618,8 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
             <td><span class="zone-pill zone-{zone_cls}">{_zone_label(r['zone'])}</span></td>
             <td class="num"><div class="score-cell">{_score_bar(r['bull_score'], '--green')}</div></td>
             <td class="num"><div class="score-cell">{_score_bar(r['bear_score'], '--red')}</div></td>
-            <td class="muted">{r.get('bull_threshold', '—')} / {r.get('bear_threshold', '—')}</td>
-            <td class="muted">{r['last_event']}</td>
+            <td class="muted col-sec">{r.get('bull_threshold', '—')} / {r.get('bear_threshold', '—')}</td>
+            <td class="muted col-sec">{r['last_event']}</td>
             <td>{_status_badge(r)}</td>
         </tr>"""
 
@@ -635,22 +719,58 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
 
     .container {{ max-width: 1180px; margin: 0 auto; padding: 28px 20px 60px; }}
 
-    .act-grid {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }}
-    .act-card {{ background:var(--card); border:1px solid var(--line); border-left:3px solid var(--amber);
-                 border-radius:10px; padding:14px 16px; }}
+    .act-grid {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }}
+    .act-card {{ background:var(--card); border:1px solid var(--card-border); border-left:3px solid var(--amber);
+                 border-radius:10px; padding:14px 16px; max-width:520px; }}
+    .act-note {{ font-size:11.5px; color:var(--muted-2); line-height:1.6;
+                 margin:6px 0 2px 50px; }}
     .act-head {{ font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }}
     .act-score {{ margin-left:auto; font-size:12px; color:var(--amber); font-weight:700; }}
-    .act-row {{ display:flex; align-items:baseline; gap:8px; font-size:13px; padding:3px 0; }}
+    .act-row {{ display:flex; align-items:baseline; gap:8px; font-size:13px; padding:3px 0;
+                flex-wrap:wrap; }}
     .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
+    .act-row .muted {{ flex:1 1 180px; min-width:0; }}
     .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
     .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
     tr.pos-breach {{ background:rgba(240,71,93,0.10); }}
+    .banner {{
+        display:flex; gap:14px; align-items:center; padding:16px 18px; margin-bottom:22px;
+        border-radius:var(--radius); border:1px solid var(--card-border);
+        background:linear-gradient(160deg, var(--card), var(--bg-elevated));
+    }}
+    .banner-icon {{ font-size:24px; line-height:1; flex:none; }}
+    .banner b {{ display:block; font-size:16px; letter-spacing:-0.01em; }}
+    .banner-sub {{ display:block; color:var(--muted); font-size:12.5px; margin-top:3px; }}
+    .banner-exit {{ border-color:rgba(240,71,93,0.45); box-shadow:0 0 0 1px rgba(240,71,93,0.12) inset; }}
+    .banner-exit b {{ color:var(--red); }}
+    .banner-entry {{ border-color:rgba(245,166,35,0.45); }}
+    .banner-entry b {{ color:var(--amber); }}
+    .banner-calm b {{ color:var(--muted); font-weight:600; }}
+    .chg {{ font-variant-numeric:tabular-nums; font-weight:600; }}
+    .scroll-hint {{ display:none; }}
+    .kpi-sub {{ font-size:11.5px; color:var(--muted-2); margin-top:-2px; }}
+    .code-hint {{
+        background:var(--bg); border:1px solid var(--card-border); border-radius:8px;
+        padding:10px 12px; font-size:11.5px; overflow-x:auto; text-align:left;
+        color:var(--muted); margin:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    }}
+    code {{ background:var(--bg-elevated); padding:1px 5px; border-radius:4px; font-size:12px; }}
+    .risk-box {{ background:var(--card); border:1px solid var(--card-border); border-radius:10px;
+                 padding:12px 16px; margin-bottom:18px; }}
+    .risk-box summary {{ cursor:pointer; font-size:13.5px; font-weight:600; }}
+    .risk-body {{ font-size:13px; line-height:1.75; margin-top:10px; }}
+    .risk-grid {{ display:grid; gap:10px; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+                  margin-bottom:12px; }}
+    .risk-label {{ display:block; color:var(--muted); font-size:11.5px; }}
+    .risk-val {{ font-size:17px; font-variant-numeric:tabular-nums; font-weight:600; }}
+    .risk-val.warn {{ color:var(--amber); }}
+    .risk-warn {{ border-left:3px solid var(--amber); padding-left:10px; }}
     tr.pos-locked {{ background:rgba(22,199,132,0.08); }}
-    .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
+    .empty-state {{ background:var(--card); border:1px dashed var(--card-border); border-radius:10px;
                     padding:22px; text-align:center; color:var(--muted); }}
-    .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
+    .conc-box {{ background:var(--card); border:1px solid var(--card-border); border-radius:10px; padding:14px 16px; }}
     .conc-line {{ font-size:13px; line-height:1.7; white-space:pre-wrap; }}
-    .method {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+    .method {{ background:var(--card); border:1px solid var(--card-border); border-radius:10px;
                padding:12px 16px; margin-bottom:18px; }}
     .method summary {{ cursor:pointer; font-weight:600; font-size:13px; }}
     .method-body {{ font-size:13px; line-height:1.75; color:var(--muted); margin-top:10px; }}
@@ -676,7 +796,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
         overflow-x: auto;
     }}
     table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ padding: 13px 16px; text-align: left; font-size: 13.5px; }}
+    th, td {{ padding: 13px 16px; text-align: left; font-size: 13.5px; white-space: nowrap; }}
     th {{
         background: var(--bg-elevated); color: var(--muted); font-weight: 600;
         font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase;
@@ -752,30 +872,24 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
     }}
 
     @media (max-width: 860px) {{
-        .act-grid {{ display:grid; gap:12px; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); }}
-    .act-card {{ background:var(--card); border:1px solid var(--line); border-left:3px solid var(--amber);
-                 border-radius:10px; padding:14px 16px; }}
-    .act-head {{ font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:8px; }}
-    .act-score {{ margin-left:auto; font-size:12px; color:var(--amber); font-weight:700; }}
-    .act-row {{ display:flex; align-items:baseline; gap:8px; font-size:13px; padding:3px 0; }}
-    .act-row > span:first-child {{ width:42px; color:var(--muted); flex:none; }}
-    .act-row b {{ font-variant-numeric:tabular-nums; font-size:15px; }}
-    .act-warn {{ margin-top:8px; font-size:12px; color:var(--amber); }}
-    tr.pos-breach {{ background:rgba(240,71,93,0.10); }}
-    tr.pos-locked {{ background:rgba(22,199,132,0.08); }}
-    .empty-state {{ background:var(--card); border:1px dashed var(--line); border-radius:10px;
-                    padding:22px; text-align:center; color:var(--muted); }}
-    .conc-box {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }}
-    .conc-line {{ font-size:13px; line-height:1.7; white-space:pre-wrap; }}
-    .method {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
-               padding:12px 16px; margin-bottom:18px; }}
-    .method summary {{ cursor:pointer; font-weight:600; font-size:13px; }}
-    .method-body {{ font-size:13px; line-height:1.75; color:var(--muted); margin-top:10px; }}
-    .method-body b {{ color:var(--text); }}
-    .method-body ul {{ margin:6px 0 6px 18px; }}
-    .kpi-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        header.hero {{ padding: 30px 18px 22px; }}
+        header.hero h1 {{ font-size: 24px; }}
+        .container {{ padding: 20px 14px 48px; }}
+        .kpi-grid {{ grid-template-columns: repeat(2, 1fr); gap: 10px; }}
+        .kpi-card {{ padding: 14px 15px; }}
+        .kpi-value {{ font-size: 23px; }}
+        /* 桌機的 320px 最小寬在窄螢幕上會撐破版面 */
+        .act-grid {{ grid-template-columns: 1fr; }}
+        .risk-grid {{ grid-template-columns: repeat(2, 1fr); }}
         table {{ font-size: 12px; }}
+        .col-sec {{ display: none; }}   /* 次要欄位讓位給可讀性 */
+        /* 表格能橫向捲動並不明顯，直接講出來 */
+        .scroll-hint {{ display:block; font-size:11.5px; color:var(--muted-2);
+                        text-align:center; margin:6px 0 0; }}
+        th, td {{ padding: 10px 12px; }}
+        .chart-card {{ padding: 14px 12px 6px; }}
         .chart-card-header {{ flex-direction: column; }}
+        .table-wrap {{ -webkit-overflow-scrolling: touch; }}
     }}
 </style>
 </head>
@@ -783,22 +897,28 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
 <header class="hero">
     <div class="brand"><span class="brand-dot"></span>Smart Money Concepts · Auto Dashboard</div>
     <h1>SMC 股票分析儀表板</h1>
-    <p>依 Order Block / FVG / 結構轉變 自動計算綜合勝率分數，<span class="live">每日由 GitHub Actions 自動更新</span> · 最後更新 {generated_at}</p>
+    <p>依 Order Block / FVG / 結構轉變 計算綜合分數，並給出可直接照做的掛單與停損價
+       · <span class="live">每日自動更新</span>
+       · 最後更新 {generated_at}<span id="stale"></span></p>
 </header>
 
 <nav class="subnav">{nav_chips}</nav>
 
 <div class="container">
+    {_action_banner_html(results, position_status)}
+
     {kpi_html}
 
-    {_methodology_html()}
+    {_positions_html(position_status)}
 
     <div class="section-title">今日行動 Today’s Orders</div>
     {_entry_plan_html(results)}
 
     {_concentration_html(concentration_note)}
 
-    {_positions_html(position_status)}
+    <div class="section-title">設定與揭露 Method &amp; Limits</div>
+    {_risk_policy_html()}
+    {_methodology_html()}
 
     <div class="section-title">追蹤清單 Watchlist</div>
     <div class="table-wrap">
@@ -806,7 +926,7 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
             <thead>
                 <tr>
                     <th>標的</th><th>漲跌%</th><th>收盤</th><th>位階</th>
-                    <th>多方分數</th><th>空方分數</th><th>回測門檻(多/空)</th><th>最新結構事件</th><th>狀態</th>
+                    <th>多方分數</th><th>空方分數</th><th class="col-sec">回測門檻(多/空)</th><th class="col-sec">最新結構事件</th><th>狀態</th>
                 </tr>
             </thead>
             <tbody>
@@ -814,11 +934,30 @@ def build_index_html(results: List[Dict], output_path: str = "index.html",
             </tbody>
         </table>
     </div>
+    <p class="scroll-hint">← 左右滑動可看更多欄位 →</p>
 
     <div class="section-title">個股圖表 Charts</div>
     {charts_html}
 </div>
-<footer>本頁面僅供技術分析研究使用，不構成投資建議，請自行審慎判斷並承擔交易風險。資料來源：Yahoo Finance (yfinance)。</footer>
+<footer>
+  <div>追蹤 {len(results)} 檔 · 出場 {getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2):g}×ATR 移動停損 · 回撤預算 {getattr(_cfg, "DRAWDOWN_BUDGET", 0.4):.0%}</div>
+  <div style="margin-top:6px;">本頁面僅供技術分析研究使用，不構成投資建議，請自行審慎判斷並承擔交易風險。資料來源：Yahoo Finance (yfinance)。</div>
+</footer>
+<script>
+// 排程壞掉時頁面會靜靜地顯示舊資料，這裡讓它自己說出來。
+(function () {{
+  var gen = new Date("{generated_iso}");
+  var days = (Date.now() - gen.getTime()) / 86400000;
+  if (days > 1.5) {{
+    var el = document.getElementById("stale");
+    if (el) {{
+      el.textContent = "（已 " + Math.floor(days) + " 天未更新，排程可能失敗）";
+      el.style.color = "#f5a623";
+      el.style.fontWeight = "600";
+    }}
+  }}
+}})();
+</script>
 </body>
 </html>"""
 

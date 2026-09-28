@@ -289,21 +289,18 @@ def send_alert_email(alerts: list, sender: str, app_password: str, recipient: st
         if ep is not None:
             order_lines.append(f"  ▸ 進場：{ep.describe()}")
         if tp is not None:
-            src = "OB 下緣" if tp.stop_source == "order_block" else "ATR 距離"
-            order_lines.append(
-                f"  ▸ 停損：{tp.stop:.2f}（{src}），"
-                f"風險 {abs(tp.entry - tp.stop) / tp.entry:.1%}")
-            # 出場給的是「今天這筆的實際停損價」，不是規則——每天排程都算得出來
+            # 只給一個停損數字：結構停損與移動停損起點取較高者，本來就是
+            # 同一個東西。給兩個數字只會讓人不知道該在券商掛哪一個。
             mult = getattr(_cfg, "TRADE_TRAIL_ATR_MULT", 2.0)
             atr_now = a.get("atr")
-            if atr_now:
-                first = max(tp.stop, ep.limit_price - mult * atr_now)
-                order_lines.append(
-                    f"  ▸ 出場：移動停損起始 {first:.2f}（{mult:g}×ATR），"
-                    f"之後每日隨最高價上調，不設固定目標")
-            else:
-                order_lines.append(
-                    f"  ▸ 出場：移動停損 {mult:g}×ATR，不設固定目標（讓獲利奔跑）")
+            ref = ep.limit_price if ep is not None else tp.entry
+            first = max(tp.stop, ref - mult * atr_now) if atr_now else tp.stop
+            src = "OB 下緣" if abs(first - tp.stop) < 1e-9 else f"{mult:g}×ATR"
+            order_lines.append(
+                f"  ▸ 停損：{first:.2f}（{src}），風險 {abs(ref - first) / ref:.1%}")
+            order_lines.append(
+                f"  ▸ 出場：不設固定目標；停損每日隨進場後最高價上調"
+                f"（{mult:g}×ATR 移動停損，只升不降）")
         sz = a.get("sizing")
         if sz:
             if sz.get("fraction", 0) > 0:

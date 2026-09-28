@@ -57,6 +57,18 @@ def test_falls_back_to_the_rule_text_without_atr(monkeypatch):
     assert "移動停損" in html and "3×ATR" in html
 
 
+def test_only_one_stop_number_is_shown(monkeypatch):
+    """
+    先前卡片同時列出「停損」（結構位）與「出場」（移動停損起點），但那是
+    同一個東西的兩種算法取較高者。兩個數字並列會讓人不知道要在券商掛哪個。
+    """
+    monkeypatch.setattr(config, "TRADE_TRAIL_ATR_MULT", 4.0)
+    html = plot_report._entry_plan_html([result(stop=85.0)])
+    assert html.count("act-row") == 2          # 限價 + 停損
+    assert html.count("91.00") == 1
+    assert "85.00" not in html                 # 結構停損不再另外列出
+
+
 def test_no_alerts_gives_the_hold_cash_message():
     html = plot_report._entry_plan_html([result(alert=False)])
     assert "維持現金部位" in html
@@ -130,3 +142,35 @@ def test_healthy_positions_ride_along_with_a_signal_mail(capture_mail):
                               position_status=st)
     b = body_of(capture_mail[0])
     assert "持倉今日停損" in b and "95.00" in b
+
+
+# ---------------------------------------------------------------------------
+# 頁面最上方的行動橫幅
+# ---------------------------------------------------------------------------
+def pos(breached=False, symbol="X"):
+    return {"symbol": symbol, "stop": 95.0, "last": 94.0 if breached else 110.0,
+            "unrealized_pct": -0.06 if breached else 0.10,
+            "stop_distance_pct": -0.01 if breached else 0.14,
+            "locked_in": not breached, "breached": breached, "bars_held": 10,
+            "entry_price": 100.0, "name": "甲"}
+
+
+def test_banner_puts_exits_ahead_of_entries():
+    """同時有新訊號和跌破停損時，先講出場——那個急迫得多。"""
+    html = plot_report._action_banner_html([result()], [pos(breached=True)])
+    assert "應出場" in html and "banner-exit" in html
+
+
+def test_banner_announces_entries_when_nothing_is_breached():
+    html = plot_report._action_banner_html([result()], [pos()])
+    assert "達到進場門檻" in html and "banner-entry" in html
+
+
+def test_banner_says_so_when_there_is_nothing_to_do():
+    html = plot_report._action_banner_html([result(alert=False)], [pos()])
+    assert "今天沒有事要做" in html and "banner-calm" in html
+
+
+def test_banner_handles_no_positions_at_all():
+    html = plot_report._action_banner_html([result(alert=False)], None)
+    assert "banner-calm" in html
