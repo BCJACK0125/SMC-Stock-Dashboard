@@ -221,13 +221,17 @@ def walk_forward_scores(
         else:
             entry_px, entry_off = fill
         future_bars = after_signal.iloc[entry_off + 1:]
+        # 成交價與成交棒要留著：圖表標記若改用收盤價重算，畫出來的報酬會跟
+        # 實際交易對不上（進場其實是隔天限價成交，出場是盤中打到停損價）。
+        rec["entry_px"] = entry_px
+        rec["entry_off"] = entry_off
 
         for side, prefix in (("bullish", "long"), ("bearish", "short")):
             plan = trade_model.plan_trade(view, side, entry_px, atr_now, **(trade_cfg or {}))
             if plan is None:
                 rec.update({f"{prefix}_ret": 0.0, f"{prefix}_bars": horizon,
                             f"{prefix}_r": 0.0, f"{prefix}_outcome": "none",
-                            f"{prefix}_rr": 0.0})
+                            f"{prefix}_rr": 0.0, f"{prefix}_exit_px": entry_px})
                 continue
             if exit_mode == "trailing":
                 res = trade_model.simulate_trailing_trade(
@@ -241,7 +245,8 @@ def walk_forward_scores(
                         f"{prefix}_bars": max(res.bars_held + entry_off + 1, 1),
                         f"{prefix}_r": res.r_multiple,
                         f"{prefix}_outcome": res.outcome,
-                        f"{prefix}_rr": plan.rr})
+                        f"{prefix}_rr": plan.rr,
+                        f"{prefix}_exit_px": res.exit_price})
         records.append(rec)
 
     return pd.DataFrame(records)
@@ -496,15 +501,30 @@ def selected_trades(wf_df: pd.DataFrame, threshold: int, side: str = "bull",
     for i in picks:
         bars = int(hold.iloc[i])
         j = min(i + bars, n - 1)
+        # 進場在訊號棒之後 entry_off + 1 根（限價成交那根），不是訊號棒本身。
+        # 成交價與出場價一併帶出來，讓圖表標記畫的就是實際發生的交易——
+        # 用收盤價重算的話，30 筆裡有 29 筆的報酬會跟標籤對不上。
+        off = int(wf["entry_off"].iloc[i]) if "entry_off" in wf.columns else -1
+        k = min(i + off + 1, n - 1)
         out.append({
-            "entry_ts": wf["ts"].iloc[i],
+            "signal_ts": wf["ts"].iloc[i],
+            "entry_ts": wf["ts"].iloc[k],
             "exit_ts": wf["ts"].iloc[j],
+            "entry_px": _opt_float(wf, "entry_px", i),
+            "exit_px": _opt_float(wf, f"{prefix}_exit_px", i),
             "ret": float(wf[f"{prefix}_ret"].iloc[i]) - cost,
             "bars": bars,
             "outcome": wf.get(f"{prefix}_outcome", pd.Series(["?"] * n)).iloc[i],
             "side": side,
         })
     return out
+
+
+def _opt_float(wf: pd.DataFrame, col: str, i: int) -> Optional[float]:
+    if col not in wf.columns:
+        return None
+    v = wf[col].iloc[i]
+    return float(v) if pd.notna(v) else None
 
 
 def trade_config(config) -> dict:

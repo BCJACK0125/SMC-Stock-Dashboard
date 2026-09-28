@@ -51,9 +51,12 @@ def _add_trade_markers(fig, df: pd.DataFrame, trades: List[Dict]) -> int:
             continue
         if e_ts not in df.index:
             continue
-        e_px = float(df["Close"].loc[e_ts])
         x_ts_eff = x_ts if (x_ts in df.index and x_ts <= end) else end
-        x_px = float(df["Close"].loc[x_ts_eff])
+        # 用交易實際的成交價，不要拿收盤價重算：進場是隔天限價成交、出場是
+        # 盤中打到停損價，兩者都不是收盤。舊版用收盤畫，30 筆裡 29 筆的
+        # 「圖上兩點算出來的報酬」跟標籤顯示的報酬對不上（最大差 9 個百分點）。
+        e_px = t.get("entry_px") or float(df["Close"].loc[e_ts])
+        x_px = t.get("exit_px") or float(df["Close"].loc[x_ts_eff])
         win = t["ret"] > 0
         color = "#f0475d" if win else "#16c784"
         label = "獲利" if win else "虧損"

@@ -50,9 +50,16 @@ _CONFIG_KEYS = (
 )
 
 
+# 回測結果的欄位格式版本。設定沒變、但結果的**結構**改了時（例如交易明細
+# 開始帶成交價），舊快取雖然「新鮮」卻缺欄位，必須一起失效。
+# 改動 run_symbol_backtest 回傳內容的形狀時要 +1。
+_RESULT_SCHEMA = 2
+
+
 def config_fingerprint(config) -> str:
     """把影響回測的設定雜湊成一個短字串。"""
     payload = {k: getattr(config, k, None) for k in _CONFIG_KEYS}
+    payload["__schema__"] = _RESULT_SCHEMA
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
@@ -121,7 +128,7 @@ def restore_timestamps(result: dict) -> dict:
     否則圖表標記那邊的 `ts in df.index` 比對會全部落空。
     """
     for t in result.get("trades") or []:
-        for k in ("entry_ts", "exit_ts"):
+        for k in ("signal_ts", "entry_ts", "exit_ts"):
             if isinstance(t.get(k), str):
                 try:
                     t[k] = pd.Timestamp(t[k])
